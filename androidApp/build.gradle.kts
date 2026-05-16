@@ -38,6 +38,7 @@ android {
 }
 
 dependencies {
+    // Proiecte interne și Core Compose
     implementation(projects.shared)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
@@ -45,8 +46,13 @@ dependencies {
     implementation(libs.compose.material.icons.extended)
     implementation(libs.androidx.activity.compose)
     debugImplementation(libs.compose.ui.tooling)
+
+    // Navigație și Ciclu de viață
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(platform("com.google.firebase:firebase-bom:34.13.0"))
+
+    // Implementare Firebase curată prin intermediul Catalogului stabilit (BoM 32.8.0)
+    implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
+    implementation(libs.firebase.auth)
 }

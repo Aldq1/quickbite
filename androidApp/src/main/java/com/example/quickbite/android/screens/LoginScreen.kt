@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.auth.FirebaseAuth
 
 private val Brand      = Color(0xFFE8430A)
 private val BrandLight = Color(0xFFFF7043)
@@ -33,12 +34,17 @@ private val White      = Color(0xFFFFFFFF)
 
 @Composable
 fun LoginScreen(
-    onLoginClick: (String, String) -> Unit,
+    onLoginSuccess: () -> Unit,
     onNavigateToRegister: () -> Unit
 ) {
+    // Inițializăm instanța Firebase Auth direct aici folosind safe handling
+    val auth = remember { FirebaseAuth.getInstance() }
+
     var email           by remember { mutableStateOf("") }
     var password        by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var isLoading       by remember { mutableStateOf(false) }
+    var errorMessage    by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -56,7 +62,7 @@ fun LoginScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.42f)
+                    .fillMaxHeight(0.38f) // Ajustat ușor pentru un aspect mai aerisit pe ecrane mici
                     .statusBarsPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -110,10 +116,13 @@ fun LoginScreen(
                 )
                 Spacer(modifier = Modifier.height(28.dp))
 
-                // Email
+                // Email Input
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        errorMessage = null // Ștergem eroarea când userul tastează din nou
+                    },
                     label = { Text("Adresă email") },
                     leadingIcon = {
                         Icon(Icons.Rounded.Email, contentDescription = null, tint = Brand)
@@ -131,10 +140,13 @@ fun LoginScreen(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Password
+                // Password Input
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        errorMessage = null
+                    },
                     label = { Text("Parolă") },
                     leadingIcon = {
                         Icon(Icons.Rounded.Lock, contentDescription = null, tint = Brand)
@@ -143,14 +155,14 @@ fun LoginScreen(
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
                             Icon(
                                 imageVector = if (passwordVisible) Icons.Rounded.VisibilityOff
-                                              else Icons.Rounded.Visibility,
+                                else Icons.Rounded.Visibility,
                                 contentDescription = null,
                                 tint = TextMuted
                             )
                         }
                     },
                     visualTransformation = if (passwordVisible) VisualTransformation.None
-                                           else PasswordVisualTransformation(),
+                    else PasswordVisualTransformation(),
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -167,7 +179,7 @@ fun LoginScreen(
 
                 // Forgot password
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                    TextButton(onClick = { }) {
+                    TextButton(onClick = { /* De implementat ulterior */ }) {
                         Text(
                             text = "Ai uitat parola?",
                             color = Brand,
@@ -181,7 +193,29 @@ fun LoginScreen(
 
                 // Primary login button
                 Button(
-                    onClick = { onLoginClick(email, password) },
+                    onClick = {
+                        val finalEmail = email.trim()
+                        val finalPassword = password.trim()
+
+                        if (finalEmail.isEmpty() || finalPassword.isEmpty()) {
+                            errorMessage = "Vă rugăm să completați toate câmpurile."
+                            return@Button
+                        }
+
+                        isLoading = true
+                        errorMessage = null
+
+                        auth.signInWithEmailAndPassword(finalEmail, finalPassword)
+                            .addOnSuccessListener {
+                                isLoading = false
+                                onLoginSuccess()
+                            }
+                            .addOnFailureListener { e: Exception ->
+                                isLoading = false
+                                errorMessage = e.localizedMessage ?: "Autentificare eșuată"
+                            }
+                    },
+                    enabled = !isLoading,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(54.dp),
@@ -189,12 +223,30 @@ fun LoginScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = Brand),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
                 ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            color = White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "Autentifică-te",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            color = White
+                        )
+                    }
+                }
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Autentifică-te",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp,
-                        color = White
+                        text = errorMessage!!,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 13.sp,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 

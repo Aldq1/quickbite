@@ -2,6 +2,7 @@ package com.example.quickbite.android.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.*
+import com.example.quickbite.android.screens.HomeScreen
 import com.example.quickbite.android.screens.LoginScreen
 import com.example.quickbite.android.screens.RegisterScreen
 
@@ -12,13 +13,19 @@ fun AppNavHost() {
     NavHost(navController = navController, startDestination = "login") {
         composable("login") {
             LoginScreen(
-                onLoginClick = { email, password ->
-
+                onLoginSuccess = {
+                    navController.navigate("home") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 },
                 onNavigateToRegister = {
                     navController.navigate("register")
                 }
             )
+        }
+
+        composable("home") {
+            HomeScreen()
         }
 
         composable("register") {

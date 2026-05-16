@@ -6,11 +6,18 @@ compose-material3 = "1.1.2"
 androidx-activityCompose = "1.8.0"
 lifecycleRuntimeCompose = "2.9.1"
 navigationCompose = "2.9.0"
+# Adăugăm o versiune stabilă de Firebase BoM compatibilă cu Kotlin 2.0.0
+firebaseBom = "32.8.0"
 
 [libraries]
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleRuntimeCompose" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+
+# Declaram platforma BoM care va impune versiuni sigure pentru toate serviciile Firebase
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-analytics = { module = "com.google.firebase:firebase-analytics" }
+firebase-auth = { module = "com.google.firebase:firebase-auth-ktx" }
+
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
 compose-ui = { module = "androidx.compose.ui:ui", version.ref = "compose" }
