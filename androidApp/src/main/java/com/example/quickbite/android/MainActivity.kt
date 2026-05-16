@@ -3,7 +3,7 @@ package com.example.quickbite.android
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.example.quickbite.navigation.AppNavHost
+import com.example.quickbite.android.navigation.AppNavHost
 import com.example.quickbite.android.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {

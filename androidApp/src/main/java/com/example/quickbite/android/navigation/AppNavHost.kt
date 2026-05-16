@@ -1,4 +1,4 @@
-package com.example.quickbite.navigation
+package com.example.quickbite.android.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.*

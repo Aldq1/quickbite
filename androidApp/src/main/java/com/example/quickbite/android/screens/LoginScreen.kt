@@ -1,4 +1,4 @@
-package com.example.quickbite.screens.login
+package com.example.quickbite.android.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
