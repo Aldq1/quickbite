@@ -1,12 +1,15 @@
 package com.example.quickbite.android.navigation
 
-
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavType
 import androidx.navigation.compose.*
+import androidx.navigation.navArgument
 import com.example.quickbite.android.screens.ClientDashboardScreen
+import com.example.quickbite.android.screens.ClientOrderingScreen
+import com.example.quickbite.android.screens.LiveFloorPlanScreen
 import com.example.quickbite.android.screens.HomeScreen
 import com.example.quickbite.android.screens.LoginScreen
 import com.example.quickbite.android.screens.ProfessionalDashboardScreen
@@ -22,7 +25,16 @@ fun AppNavHost() {
     val navController = rememberNavController()
     val context = LocalContext.current
 
-    NavHost(navController = navController, startDestination = "login") {
+    val startDestination = if (FirebaseAuth.getInstance().currentUser != null) "home" else "login"
+
+    val signOut: () -> Unit = {
+        FirebaseAuth.getInstance().signOut()
+        navController.navigate("login") {
+            popUpTo(0) { inclusive = true }
+        }
+    }
+
+    NavHost(navController = navController, startDestination = startDestination) {
 
         composable("login") {
             LoginScreen(
@@ -84,11 +96,54 @@ fun AppNavHost() {
         }
 
         composable("restaurant_dashboard") {
-            RestaurantDashboardScreen()
+            RestaurantDashboardScreen(onSignOut = signOut)
         }
 
         composable("client_dashboard") {
-            ClientDashboardScreen()
+            ClientDashboardScreen(
+                onNavigateToOrdering = { restaurantId, tableNumber ->
+                    navController.navigate("client_ordering/$restaurantId/$tableNumber")
+                },
+                onViewFloorPlan = { restaurantId ->
+                    navController.navigate("live_floor_plan/$restaurantId")
+                },
+                onSignOut = signOut
+            )
+        }
+
+        composable(
+            route = "client_ordering/{restaurantId}/{tableNumber}",
+            arguments = listOf(
+                navArgument("restaurantId") { type = NavType.StringType },
+                navArgument("tableNumber")  { type = NavType.IntType }
+            )
+        ) { backStackEntry ->
+            val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: return@composable
+            val tableNumber  = backStackEntry.arguments?.getInt("tableNumber") ?: 1
+            ClientOrderingScreen(
+                restaurantId = restaurantId,
+                tableNumber  = tableNumber,
+                onOrderPlaced = {
+                    navController.popBackStack()
+                },
+                onBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
+            route     = "live_floor_plan/{restaurantId}",
+            arguments = listOf(navArgument("restaurantId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: return@composable
+            LiveFloorPlanScreen(
+                restaurantId         = restaurantId,
+                onNavigateToOrdering = { rid, tableNum ->
+                    navController.navigate("client_ordering/$rid/$tableNum")
+                },
+                onBack = { navController.popBackStack() }
+            )
         }
 
         composable("producer_dashboard") {

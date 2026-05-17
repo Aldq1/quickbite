@@ -14,7 +14,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 @Composable
 fun HomeScreen(navController: NavController) {
     LaunchedEffect(Unit) {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return@LaunchedEffect
+        val uid = FirebaseAuth.getInstance().currentUser?.uid
+        if (uid == null) {
+            navController.navigate("login") { popUpTo("home") { inclusive = true } }
+            return@LaunchedEffect
+        }
         FirebaseFirestore.getInstance()
             .collection("users")
             .document(uid)
@@ -25,9 +29,14 @@ fun HomeScreen(navController: NavController) {
                     "CLIENT"       -> "client_dashboard"
                     "PRODUCER"     -> "producer_dashboard"
                     "PROFESSIONAL" -> "professional_dashboard"
-                    else           -> return@addOnSuccessListener
+                    else           -> "role_selection"
                 }
                 navController.navigate(route) {
+                    popUpTo("home") { inclusive = true }
+                }
+            }
+            .addOnFailureListener {
+                navController.navigate("login") {
                     popUpTo("home") { inclusive = true }
                 }
             }

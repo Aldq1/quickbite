@@ -32,6 +32,7 @@ private val TextMuted  = Color(0xFF8A8A8E)
 private val BorderIdle = Color(0xFFE0E0E0)
 private val White      = Color(0xFFFFFFFF)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
@@ -205,15 +206,20 @@ fun LoginScreen(
                         isLoading = true
                         errorMessage = null
 
-                        auth.signInWithEmailAndPassword(finalEmail, finalPassword)
-                            .addOnSuccessListener {
-                                isLoading = false
-                                onLoginSuccess()
-                            }
-                            .addOnFailureListener { e: Exception ->
-                                isLoading = false
-                                errorMessage = e.localizedMessage ?: "Autentificare eșuată"
-                            }
+                        try {
+                            auth.signInWithEmailAndPassword(finalEmail, finalPassword)
+                                .addOnSuccessListener {
+                                    isLoading = false
+                                    onLoginSuccess()
+                                }
+                                .addOnFailureListener { e: Exception ->
+                                    isLoading = false
+                                    errorMessage = e.localizedMessage ?: "Autentificare eșuată"
+                                }
+                        } catch (e: Exception) {
+                            isLoading = false
+                            errorMessage = e.localizedMessage ?: "Autentificare eșuată"
+                        }
                     },
                     enabled = !isLoading,
                     modifier = Modifier

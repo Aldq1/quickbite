@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,7 +50,7 @@ private data class MenuItem(
 // ── Root screen ───────────────────────────────────────────────────────────────
 
 @Composable
-fun RestaurantDashboardScreen() {
+fun RestaurantDashboardScreen(onSignOut: () -> Unit = {}) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Profil Locație", "Generator Meniu", "Setări")
 
@@ -61,14 +62,25 @@ fun RestaurantDashboardScreen() {
                         .fillMaxWidth()
                         .background(Brand)
                         .statusBarsPadding()
-                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                        .padding(start = 20.dp, end = 4.dp, top = 8.dp, bottom = 8.dp)
                 ) {
                     Text(
                         text = "Dashboard Restaurant",
                         color = White,
                         fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.CenterStart).padding(vertical = 8.dp)
                     )
+                    IconButton(
+                        onClick = onSignOut,
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ExitToApp,
+                            contentDescription = "Deconectare",
+                            tint = White
+                        )
+                    }
                 }
                 TabRow(
                     selectedTabIndex = selectedTab,
@@ -101,7 +113,7 @@ fun RestaurantDashboardScreen() {
             when (selectedTab) {
                 0 -> ProfilLocatieTab()
                 1 -> GeneratorMeniuTab()
-                2 -> SetariTab()
+                2 -> SetariTab(onSignOut = onSignOut)
             }
         }
     }
@@ -255,6 +267,7 @@ private fun GeneratorMeniuTab() {
     val context = LocalContext.current
     var categoryInput      by remember { mutableStateOf("") }
     var productInput       by remember { mutableStateOf("") }
+    var priceInput         by remember { mutableStateOf("") }
     var ingredientName     by remember { mutableStateOf("") }
     var ingredientWeight   by remember { mutableStateOf("") }
     var currentIngredients by remember { mutableStateOf(listOf<Ingredient>()) }
@@ -286,6 +299,23 @@ private fun GeneratorMeniuTab() {
                 label = { Text("Denumire Produs (ex: Carbonara)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                colors = brandTextFieldColors()
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = priceInput,
+                onValueChange = { v ->
+                    if (v.isEmpty() || v.matches(Regex("^\\d{0,5}(\\.\\d{0,2})?\$"))) priceInput = v
+                },
+                label = { Text("Preț (RON)") },
+                placeholder = { Text("ex: 32.50") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                ),
                 colors = brandTextFieldColors()
             )
 
@@ -437,17 +467,19 @@ private fun GeneratorMeniuTab() {
                         return@Button
                     }
                     if (categoryInput.isBlank() || productInput.isBlank()) return@Button
-                    val savedCategory = categoryInput.trim()
-                    val savedProduct = productInput.trim()
+                    val savedCategory    = categoryInput.trim()
+                    val savedProduct     = productInput.trim()
+                    val savedPrice       = priceInput.toDoubleOrNull() ?: 0.0
                     val savedIngredients = currentIngredients.toList()
-                    val ingredientsList = savedIngredients.map {
+                    val ingredientsList  = savedIngredients.map {
                         mapOf("name" to it.name, "weight" to it.weight)
                     }
-                    val data: Map<String, Any> = mapOf(
-                        "category" to savedCategory,
-                        "product" to savedProduct,
-                        "ingredients" to ingredientsList
-                    )
+                    val data: Map<String, Any> = buildMap {
+                        put("category",    savedCategory)
+                        put("product",     savedProduct)
+                        put("ingredients", ingredientsList)
+                        if (savedPrice > 0.0) put("price", savedPrice)
+                    }
                     FirebaseFirestore.getInstance()
                         .collection("users").document(uid)
                         .collection("restaurant_menu")
@@ -455,12 +487,13 @@ private fun GeneratorMeniuTab() {
                         .addOnSuccessListener {
                             Toast.makeText(context, "Produs salvat cu succes!", Toast.LENGTH_SHORT).show()
                             menuItems = menuItems + MenuItem(
-                                category = savedCategory,
-                                product = savedProduct,
+                                category    = savedCategory,
+                                product     = savedProduct,
                                 ingredients = savedIngredients
                             )
-                            categoryInput = ""
-                            productInput = ""
+                            categoryInput      = ""
+                            productInput       = ""
+                            priceInput         = ""
                             currentIngredients = emptyList()
                         }
                         .addOnFailureListener { e: Exception ->
@@ -524,7 +557,7 @@ private fun GeneratorMeniuTab() {
 // ── Tab 3: Setări ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun SetariTab() {
+private fun SetariTab(onSignOut: () -> Unit = {}) {
     var notificationsEnabled by remember { mutableStateOf(true) }
     var emailReports         by remember { mutableStateOf(false) }
     var autoAcceptOrders     by remember { mutableStateOf(false) }
@@ -564,7 +597,7 @@ private fun SetariTab() {
         Spacer(Modifier.height(8.dp))
 
         OutlinedButton(
-            onClick = { },
+            onClick = onSignOut,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp),
@@ -572,6 +605,13 @@ private fun SetariTab() {
             border = BorderStroke(1.5.dp, RedAlert.copy(alpha = 0.5f)),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = RedAlert)
         ) {
+            Icon(
+                imageVector = Icons.Rounded.ExitToApp,
+                contentDescription = null,
+                tint = RedAlert,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "Deconectare",
                 fontSize = 16.sp,

@@ -2,6 +2,8 @@
 agp = "8.10.1"
 kotlin = "2.0.0"
 compose = "1.5.4"
+compose-multiplatform = "1.6.11"
+coroutines = "1.8.1"
 compose-material3 = "1.1.2"
 androidx-activityCompose = "1.8.0"
 lifecycleRuntimeCompose = "2.9.1"
@@ -35,3 +37,5 @@ kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlinCocoapods = { id = "org.jetbrains.kotlin.native.cocoapods", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+jetbrainsCompose = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

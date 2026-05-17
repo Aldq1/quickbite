@@ -18,3 +18,4 @@ dependencyResolutionManagement {
 rootProject.name = "QuickBite"
 include(":androidApp")
 include(":shared")
+include(":desktopApp")
