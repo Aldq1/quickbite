@@ -1,8 +1,6 @@
 package com.example.quickbite.android.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +23,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.auth.FirebaseAuth
 
 private val RegBrand      = Color(0xFFE8430A)
 private val RegBrandLight = Color(0xFFFF7043)
@@ -35,13 +34,16 @@ private val RegWhite      = Color(0xFFFFFFFF)
 
 @Composable
 fun RegisterScreen(
-    onRegisterClick: (String, String, String) -> Unit,
+    onRegisterSuccess: () -> Unit,
     onBackToLogin: () -> Unit
 ) {
+    val auth = remember { FirebaseAuth.getInstance() }
+
     var email           by remember { mutableStateOf("") }
     var password        by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
-    var role            by remember { mutableStateOf("RESTAURANT") }
+    var isLoading       by remember { mutableStateOf(false) }
+    var errorMessage    by remember { mutableStateOf<String?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -115,7 +117,10 @@ fun RegisterScreen(
                 // Email
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        errorMessage = null
+                    },
                     label = { Text("Adresă email") },
                     leadingIcon = {
                         Icon(Icons.Rounded.Email, contentDescription = null, tint = RegBrand)
@@ -136,7 +141,10 @@ fun RegisterScreen(
                 // Password
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        errorMessage = null
+                    },
                     label = { Text("Parolă") },
                     leadingIcon = {
                         Icon(Icons.Rounded.Lock, contentDescription = null, tint = RegBrand)
@@ -164,49 +172,38 @@ fun RegisterScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Role selector
-                Text(
-                    text = "Tip cont",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = RegTextMuted
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(1.dp, RegBorderIdle, RoundedCornerShape(14.dp)),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
-                    listOf("RESTAURANT" to "Restaurant", "CLIENT" to "Client").forEach { (value, label) ->
-                        val selected = role == value
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (selected) RegBrand else Color.Transparent)
-                                .clickable { role = value }
-                                .padding(vertical = 14.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 14.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (selected) RegWhite else RegTextMuted
-                            )
-                        }
-                    }
-                }
 
                 Spacer(modifier = Modifier.height(28.dp))
 
                 // Primary register button
                 Button(
-                    onClick = { onRegisterClick(email, password, role) },
+                    onClick = {
+                        val finalEmail    = email.trim()
+                        val finalPassword = password.trim()
+
+                        if (finalEmail.isEmpty() || finalPassword.isEmpty()) {
+                            errorMessage = "Vă rugăm să completați toate câmpurile."
+                            return@Button
+                        }
+                        if (finalPassword.length < 6) {
+                            errorMessage = "Parola trebuie să aibă cel puțin 6 caractere."
+                            return@Button
+                        }
+
+                        isLoading = true
+                        errorMessage = null
+
+                        auth.createUserWithEmailAndPassword(finalEmail, finalPassword)
+                            .addOnSuccessListener {
+                                isLoading = false
+                                onRegisterSuccess()
+                            }
+                            .addOnFailureListener { e ->
+                                isLoading = false
+                                errorMessage = e.localizedMessage ?: "Înregistrare eșuată"
+                            }
+                    },
+                    enabled = !isLoading,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(54.dp),
@@ -214,12 +211,30 @@ fun RegisterScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = RegBrand),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
                 ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            color = RegWhite,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "Continuă",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            color = RegWhite
+                        )
+                    }
+                }
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Înregistrează-te",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp,
-                        color = RegWhite
+                        text = errorMessage!!,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 13.sp,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
