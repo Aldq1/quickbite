@@ -90,29 +90,6 @@ private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont 
     addOnFailureListener { cont.resumeWith(Result.failure(it)) }
 }
 
-private fun mergeOrderItems(
-    existing: List<Map<String, Any>>,
-    incoming: List<Map<String, Any>>
-): List<Map<String, Any>> {
-    val result = existing.map { it.toMutableMap() }.toMutableList()
-    for (item in incoming) {
-        val name = item["name"] as? String ?: continue
-        val incomingQty = when (val q = item["quantity"]) {
-            is Int  -> q;  is Long -> q.toInt();  else -> 0
-        }
-        val idx = result.indexOfFirst { it["name"] == name }
-        if (idx >= 0) {
-            val existingQty = when (val q = result[idx]["quantity"]) {
-                is Int  -> q;  is Long -> q.toInt();  else -> 0
-            }
-            result[idx]["quantity"] = existingQty + incomingQty
-        } else {
-            result.add(item.toMutableMap())
-        }
-    }
-    return result
-}
-
 private fun categoryEmoji(category: String) = when (category.trim().lowercase()) {
     "burgeri"   -> "🍔"
     "pizza"     -> "🍕"
@@ -149,12 +126,9 @@ fun ClientOrderingScreen(
     var tableOccupied    by remember { mutableStateOf(false) }
     var tableStatusKnown by remember { mutableStateOf(false) }
     var selectedCategory by remember { mutableStateOf("Toate") }
-    var showExitDialog   by remember { mutableStateOf(false) }
 
-    BackHandler {
-        if (cartItems.isNotEmpty()) showExitDialog = true
-        // else: silently intercept — user stays in the session
-    }
+    // Completely block system back — prevents accidental sign-out on an empty back stack
+    BackHandler(enabled = true) { }
 
     LaunchedEffect(restaurantId) {
         try {
@@ -230,44 +204,22 @@ fun ClientOrderingScreen(
             }
             scope.launch(Dispatchers.IO) {
                 try {
-                    val existingSnap = FirebaseFirestore.getInstance()
+                    // Write directly — no compound query (avoids missing Firestore index errors)
+                    val docRef = FirebaseFirestore.getInstance()
                         .collection("active_orders")
-                        .whereEqualTo("occupantUid", currentUid)
-                        .whereEqualTo("status", "PENDING")
-                        .get().await()
-
-                    val existingDoc = existingSnap.documents.firstOrNull { doc ->
-                        doc.getString("restaurantId") == restaurantId &&
-                        doc.getLong("tableNumber")?.toInt() == tableNumber
-                    }
-
-                    val orderId: String
-                    if (existingDoc != null) {
-                        @Suppress("UNCHECKED_CAST")
-                        val existingItems = existingDoc.get("items") as? List<Map<String, Any>> ?: emptyList()
-                        val existingTotal = existingDoc.getDouble("totalPrice") ?: 0.0
-                        existingDoc.reference.update(mapOf(
-                            "items"      to mergeOrderItems(existingItems, orderItems),
-                            "totalPrice" to existingTotal + totalPrice
+                        .add(mapOf(
+                            "restaurantId" to restaurantId,
+                            "tableNumber"  to tableNumber,
+                            "occupantUid"  to currentUid,
+                            "items"        to orderItems,
+                            "totalPrice"   to totalPrice,
+                            "status"       to "PENDING",
+                            "timestamp"    to System.currentTimeMillis()
                         )).await()
-                        orderId = existingDoc.id
-                    } else {
-                        val docRef = FirebaseFirestore.getInstance()
-                            .collection("active_orders")
-                            .add(mapOf(
-                                "restaurantId" to restaurantId,
-                                "tableNumber"  to tableNumber,
-                                "occupantUid"  to currentUid,
-                                "items"        to orderItems,
-                                "totalPrice"   to totalPrice,
-                                "status"       to "PENDING",
-                                "timestamp"    to System.currentTimeMillis()
-                            )).await()
-                        FirestoreService.updateTableStatusAsync(
-                            restaurantId, tableNumber, TableStatus.OCCUPIED, occupantUid = currentUid
-                        )
-                        orderId = docRef.id
-                    }
+                    FirestoreService.updateTableStatusAsync(
+                        restaurantId, tableNumber, TableStatus.OCCUPIED, occupantUid = currentUid
+                    )
+                    val orderId = docRef.id
                     withContext(Dispatchers.Main) {
                         placedItemCount = capturedCount
                         cartItems.clear()
@@ -320,42 +272,6 @@ fun ClientOrderingScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Mulțumesc!", color = OWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                }
-            }
-        )
-    }
-
-    // ── Exit confirmation dialog (shown when back pressed with items in cart) ───
-    if (showExitDialog) {
-        AlertDialog(
-            onDismissRequest = { showExitDialog = false },
-            shape            = RoundedCornerShape(24.dp),
-            containerColor   = OWhite,
-            title = {
-                Text("Părăsești sesiunea?", fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold, color = OTextDark, textAlign = TextAlign.Center)
-            },
-            text = {
-                Text("Ai ${cartItems.sumOf { it.quantity }} produs(e) în coș. Dacă ieși, coșul se va pierde.",
-                    fontSize = 14.sp, color = OTextMuted, textAlign = TextAlign.Center)
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showExitDialog = false; onBack() },
-                    shape   = RoundedCornerShape(12.dp),
-                    colors  = ButtonDefaults.buttonColors(containerColor = ORedError),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Ieși", color = OWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                }
-            },
-            dismissButton = {
-                OutlinedButton(
-                    onClick  = { showExitDialog = false },
-                    shape    = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Rămân", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = OBrand)
                 }
             }
         )

@@ -3,6 +3,7 @@ package com.example.quickbite.android.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -10,6 +11,9 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.NavController
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+
+// Demo restaurant ID used when Firestore has no data or the role is CLIENT
+private const val DEMO_ID = "demo_quickbite_central"
 
 @Composable
 fun HomeScreen(navController: NavController) {
@@ -26,7 +30,8 @@ fun HomeScreen(navController: NavController) {
             .addOnSuccessListener { doc ->
                 val route = when (doc.getString("role")) {
                     "RESTAURANT"   -> "restaurant_dashboard"
-                    "CLIENT"       -> "client_dashboard"
+                    // CLIENT picks a table from the floor plan so tableNumber is dynamic
+                    "CLIENT"       -> "live_floor_plan/$DEMO_ID"
                     "PRODUCER"     -> "producer_dashboard"
                     "PROFESSIONAL" -> "professional_dashboard"
                     else           -> "role_selection"
@@ -36,13 +41,14 @@ fun HomeScreen(navController: NavController) {
                 }
             }
             .addOnFailureListener {
-                navController.navigate("login") {
+                // If role lookup fails, send to floor plan so table number is still dynamic
+                navController.navigate("live_floor_plan/$DEMO_ID") {
                     popUpTo("home") { inclusive = true }
                 }
             }
     }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
     }
 }
