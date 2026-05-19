@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material3.*
@@ -27,7 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quickbite.android.services.FirestoreService
 import com.example.quickbite.models.TableStatus
+import com.google.android.gms.tasks.Task
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 private val OBrand       = Color(0xFFE8430A)
 private val OTextDark    = Color(0xFF1C1C1E)
@@ -36,8 +44,44 @@ private val OBgSurface   = Color(0xFFF7F7F7)
 private val OWhite       = Color(0xFFFFFFFF)
 private val OBrandTint   = Color(0xFFFFF0EC)
 private val OGreenAccent = Color(0xFF34C759)
+private val ORedError    = Color(0xFFFF3B30)
 
 private data class MenuEntry(val name: String, val category: String, val price: Double = 0.0)
+private data class CartItem(val name: String, val category: String, val price: Double, val quantity: Int)
+
+private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont ->
+    addOnSuccessListener { cont.resumeWith(Result.success(it)) }
+    addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+}
+
+// Merges incoming cart items into an existing Firestore items list, combining quantities for duplicates.
+// Firestore returns numbers as Long; both Int and Long are handled safely.
+private fun mergeOrderItems(
+    existing: List<Map<String, Any>>,
+    incoming: List<Map<String, Any>>
+): List<Map<String, Any>> {
+    val result = existing.map { it.toMutableMap() }.toMutableList()
+    for (item in incoming) {
+        val name = item["name"] as? String ?: continue
+        val incomingQty = when (val q = item["quantity"]) {
+            is Int  -> q
+            is Long -> q.toInt()
+            else    -> 0
+        }
+        val idx = result.indexOfFirst { it["name"] == name }
+        if (idx >= 0) {
+            val existingQty = when (val q = result[idx]["quantity"]) {
+                is Int  -> q
+                is Long -> q.toInt()
+                else    -> 0
+            }
+            result[idx]["quantity"] = existingQty + incomingQty
+        } else {
+            result.add(item.toMutableMap())
+        }
+    }
+    return result
+}
 
 // ── Root screen ───────────────────────────────────────────────────────────────
 
@@ -49,22 +93,31 @@ fun ClientOrderingScreen(
     onOrderPlaced: () -> Unit,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
-    var menuEntries   by remember { mutableStateOf<List<MenuEntry>>(emptyList()) }
-    var isLoading     by remember { mutableStateOf(true) }
-    var isPlacing     by remember { mutableStateOf(false) }
-    var quantities    by remember { mutableStateOf(mapOf<String, Int>()) }
-    var placedOrderId by remember { mutableStateOf<String?>(null) }
-    var orderReady    by remember { mutableStateOf(false) }
-    var tableOccupied by remember { mutableStateOf(false) }
+    val context    = LocalContext.current
+    val scope      = rememberCoroutineScope()
+    val currentUid = remember { FirebaseAuth.getInstance().currentUser?.uid }
+    var menuEntries      by remember { mutableStateOf<List<MenuEntry>>(emptyList()) }
+    var isLoading        by remember { mutableStateOf(true) }
+    var isPlacing        by remember { mutableStateOf(false) }
+    val cartItems        = remember { mutableStateListOf<CartItem>() }
+    var placedItemCount  by remember { mutableStateOf(0) }
+    var placedOrderId    by remember { mutableStateOf<String?>(null) }
+    var orderReady       by remember { mutableStateOf(false) }
+    var tableOccupied    by remember { mutableStateOf(false) }
+    // Stays false until the first Firestore snapshot fires — prevents brief menu flash on occupied tables
+    var tableStatusKnown by remember { mutableStateOf(false) }
 
     LaunchedEffect(restaurantId) {
-        FirebaseFirestore.getInstance()
-            .collection("users").document(restaurantId)
-            .collection("restaurant_menu")
-            .get()
-            .addOnSuccessListener { snap ->
-                menuEntries = snap.documents.mapNotNull { doc ->
+        try {
+            val snap = withContext(Dispatchers.IO) {
+                FirebaseFirestore.getInstance()
+                    .collection("users").document(restaurantId)
+                    .collection("restaurant_menu")
+                    .get()
+                    .await()
+            }
+            menuEntries = withContext(Dispatchers.Default) {
+                snap.documents.mapNotNull { doc ->
                     val name = doc.getString("product") ?: return@mapNotNull null
                     MenuEntry(
                         name     = name,
@@ -72,9 +125,14 @@ fun ClientOrderingScreen(
                         price    = doc.getDouble("price") ?: 0.0
                     )
                 }
-                isLoading = false
             }
-            .addOnFailureListener { isLoading = false }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // leave menuEntries empty — UI handles the empty state
+        } finally {
+            isLoading = false
+        }
     }
 
     // Watch placed order for completion notification
@@ -86,19 +144,23 @@ fun ClientOrderingScreen(
         onDispose { reg.remove() }
     }
 
-    // Block ordering when table is already occupied by another session
+    // Real-time table status — blocks access only when occupied by a DIFFERENT user's UID.
+    // If the current user owns the session (same UID), they are allowed to continue ordering.
     DisposableEffect(restaurantId, tableNumber) {
         val reg = FirebaseFirestore.getInstance()
             .collection("users").document(restaurantId)
             .collection("tables").document(tableNumber.toString())
             .addSnapshotListener { snapshot, _ ->
-                tableOccupied = snapshot?.getString("status") == TableStatus.OCCUPIED
+                val isOccupied   = snapshot?.getString("status") == TableStatus.OCCUPIED
+                val occupantUid  = snapshot?.getString("occupantUid")
+                // Blocked = table is occupied AND the lock belongs to someone else
+                tableOccupied    = isOccupied && occupantUid != null && occupantUid != currentUid
+                tableStatusKnown = true
             }
         onDispose { reg.remove() }
     }
 
-    val cartItems = quantities.filter { it.value > 0 }
-    val cartTotal = cartItems.values.sum()
+    val cartTotal = cartItems.sumOf { it.quantity }
 
     // ── Order Ready dialog ────────────────────────────────────────────────────
     if (orderReady) {
@@ -178,9 +240,10 @@ fun ClientOrderingScreen(
                     )
                     Text(
                         text = when {
+                            tableOccupied         -> "Masă blocată"
                             placedOrderId != null -> "Comanda plasată · așteptăm..."
-                            cartTotal > 0 -> "$cartTotal produs${if (cartTotal != 1) "e" else ""} selectate"
-                            else -> "Alege ce dorești"
+                            cartTotal > 0         -> "$cartTotal produs${if (cartTotal != 1) "e" else ""} selectate"
+                            else                  -> "Alege ce dorești"
                         },
                         color = OWhite.copy(alpha = 0.8f),
                         fontSize = 12.sp
@@ -189,59 +252,92 @@ fun ClientOrderingScreen(
             }
         },
         bottomBar = {
-            if (cartItems.isNotEmpty() && placedOrderId == null) {
+            if (cartItems.isNotEmpty() && placedOrderId == null && !tableOccupied) {
                 Surface(shadowElevation = 12.dp, color = OWhite) {
                     Column(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (tableOccupied) {
-                            Text(
-                                text = "Această masă este deja ocupată!",
-                                color = Color(0xFFFF3B30),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
                         Button(
                             onClick = {
+                                if (currentUid == null) return@Button
                                 isPlacing = true
-                                val totalPrice = cartItems.entries.sumOf { (name, qty) ->
-                                    (menuEntries.find { it.name == name }?.price ?: 0.0) * qty
-                                }
-                                val orderItems = cartItems.entries.map { (name, qty) ->
-                                    val entry = menuEntries.find { it.name == name }
+                                val capturedCount = cartTotal
+                                val totalPrice = cartItems.sumOf { it.price * it.quantity }
+                                val orderItems: List<Map<String, Any>> = cartItems.map { item ->
                                     mapOf(
-                                        "name"     to name,
-                                        "category" to (entry?.category ?: ""),
-                                        "quantity" to qty
+                                        "name"     to item.name,
+                                        "category" to item.category,
+                                        "quantity" to item.quantity
                                     )
                                 }
-                                FirebaseFirestore.getInstance()
-                                    .collection("active_orders")
-                                    .add(
-                                        mapOf(
-                                            "restaurantId" to restaurantId,
-                                            "tableNumber"  to tableNumber,
-                                            "items"        to orderItems,
-                                            "totalPrice"   to totalPrice,
-                                            "status"       to "PENDING",
-                                            "timestamp"    to System.currentTimeMillis()
-                                        )
-                                    )
-                                    .addOnSuccessListener { docRef ->
-                                        FirestoreService.updateTableStatus(restaurantId, tableNumber, "OCCUPIED")
-                                        placedOrderId = docRef.id
-                                        quantities = emptyMap()
-                                        isPlacing = false
-                                        Toast.makeText(context, "Comanda a fost plasată!", Toast.LENGTH_SHORT).show()
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        // Single-field query — no composite index required.
+                                        // restaurantId + tableNumber are verified client-side.
+                                        val existingSnap = FirebaseFirestore.getInstance()
+                                            .collection("active_orders")
+                                            .whereEqualTo("occupantUid", currentUid)
+                                            .whereEqualTo("status", "PENDING")
+                                            .get()
+                                            .await()
+
+                                        val existingDoc = existingSnap.documents.firstOrNull { doc ->
+                                            doc.getString("restaurantId") == restaurantId &&
+                                            doc.getLong("tableNumber")?.toInt() == tableNumber
+                                        }
+
+                                        val orderId: String
+                                        if (existingDoc != null) {
+                                            // Active session found — merge new items into the existing order
+                                            @Suppress("UNCHECKED_CAST")
+                                            val existingItems = existingDoc.get("items") as? List<Map<String, Any>> ?: emptyList()
+                                            val existingTotal = existingDoc.getDouble("totalPrice") ?: 0.0
+                                            existingDoc.reference.update(
+                                                mapOf(
+                                                    "items"      to mergeOrderItems(existingItems, orderItems),
+                                                    "totalPrice" to existingTotal + totalPrice
+                                                )
+                                            ).await()
+                                            orderId = existingDoc.id
+                                        } else {
+                                            // No active session — create a new order and lock the table
+                                            val docRef = FirebaseFirestore.getInstance()
+                                                .collection("active_orders")
+                                                .add(
+                                                    mapOf(
+                                                        "restaurantId" to restaurantId,
+                                                        "tableNumber"  to tableNumber,
+                                                        "occupantUid"  to currentUid,
+                                                        "items"        to orderItems,
+                                                        "totalPrice"   to totalPrice,
+                                                        "status"       to "PENDING",
+                                                        "timestamp"    to System.currentTimeMillis()
+                                                    )
+                                                )
+                                                .await()
+                                            FirestoreService.updateTableStatusAsync(
+                                                restaurantId, tableNumber, TableStatus.OCCUPIED, occupantUid = currentUid
+                                            )
+                                            orderId = docRef.id
+                                        }
+
+                                        withContext(Dispatchers.Main) {
+                                            placedItemCount = capturedCount
+                                            cartItems.clear()
+                                            placedOrderId = orderId
+                                            isPlacing     = false
+                                            Toast.makeText(context, "Comanda a fost plasată!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            isPlacing = false
+                                            Toast.makeText(context, "Eroare la plasarea comenzii.", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
-                                    .addOnFailureListener { e ->
-                                        Toast.makeText(context, "Eroare: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        isPlacing = false
-                                    }
+                                }
                             },
                             enabled = !isPlacing && !tableOccupied,
                             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -263,16 +359,26 @@ fun ClientOrderingScreen(
         containerColor = OBgSurface
     ) { padding ->
         when {
-            isLoading -> Box(
+            // Wait for both the menu fetch and the first table snapshot before rendering anything
+            isLoading || !tableStatusKnown -> Box(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) { CircularProgressIndicator(color = OBrand) }
 
-            // ── Awaiting order state ──────────────────────────────────────────
+            // ── Order already placed: awaiting delivery ───────────────────────
+            // Check this BEFORE tableOccupied: once we own the order, the table
+            // will be OCCUPIED by us — we must not block our own awaiting screen.
             placedOrderId != null -> AwaitingOrderScreen(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 tableNumber = tableNumber,
-                itemCount = cartTotal
+                itemCount = placedItemCount
+            )
+
+            // ── Anti-hijack: table occupied by another session ────────────────
+            tableOccupied -> OccupiedTableScreen(
+                modifier    = Modifier.fillMaxSize().padding(padding),
+                tableNumber = tableNumber,
+                onBack      = onBack
             )
 
             menuEntries.isEmpty() -> Box(
@@ -311,20 +417,120 @@ fun ClientOrderingScreen(
                     items.forEach { entry ->
                         OrderableItemCard(
                             entry = entry,
-                            quantity = quantities[entry.name] ?: 0,
+                            quantity = cartItems.find { it.name == entry.name }?.quantity ?: 0,
                             onIncrease = {
-                                quantities = quantities + (entry.name to ((quantities[entry.name] ?: 0) + 1))
+                                val idx = cartItems.indexOfFirst { it.name == entry.name }
+                                if (idx >= 0) cartItems[idx] = cartItems[idx].copy(quantity = cartItems[idx].quantity + 1)
+                                else cartItems.add(CartItem(entry.name, entry.category, entry.price, 1))
                             },
                             onDecrease = {
-                                val cur = quantities[entry.name] ?: 0
-                                quantities = if (cur <= 1) quantities - entry.name
-                                else quantities + (entry.name to (cur - 1))
+                                val idx = cartItems.indexOfFirst { it.name == entry.name }
+                                if (idx >= 0) {
+                                    if (cartItems[idx].quantity <= 1) cartItems.removeAt(idx)
+                                    else cartItems[idx] = cartItems[idx].copy(quantity = cartItems[idx].quantity - 1)
+                                }
                             }
                         )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
             }
+        }
+    }
+}
+
+// ── Occupied table blocking screen ───────────────────────────────────────────
+
+@Composable
+private fun OccupiedTableScreen(
+    modifier: Modifier,
+    tableNumber: Int,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Double-ring warning icon
+        Box(
+            modifier = Modifier
+                .size(104.dp)
+                .clip(CircleShape)
+                .background(ORedError.copy(alpha = 0.09f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(ORedError.copy(alpha = 0.13f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector        = Icons.Rounded.Lock,
+                    contentDescription = null,
+                    tint               = ORedError,
+                    modifier           = Modifier.size(36.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(30.dp))
+
+        Text(
+            text       = "Masă Ocupată",
+            fontSize   = 26.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color      = OTextDark,
+            textAlign  = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        // Table number badge
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(ORedError.copy(alpha = 0.08f))
+                .padding(horizontal = 18.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text       = "Masa $tableNumber",
+                fontSize   = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color      = ORedError
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Text(
+            text       = "Această masă este deja gestionată de un alt dispozitiv de la masa ta. Vă rugăm să folosiți acel telefon pentru a comanda.",
+            fontSize   = 15.sp,
+            color      = OTextMuted,
+            textAlign  = TextAlign.Center,
+            lineHeight = 23.sp
+        )
+
+        Spacer(Modifier.height(44.dp))
+
+        Button(
+            onClick  = onBack,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape  = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = OBrand)
+        ) {
+            Text(
+                text       = "Am înțeles",
+                fontSize   = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color      = OWhite
+            )
         }
     }
 }

@@ -27,7 +27,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quickbite.models.TableStatus
+import com.google.android.gms.tasks.Task
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 private val FLPBrand       = Color(0xFFE8430A)
 private val FLPDarkBg      = Color(0xFF0C0C0C)
@@ -40,6 +44,11 @@ private val FLPWhite       = Color(0xFFFFFFFF)
 
 private const val FLP_TABLE_COUNT = 20
 private const val FLP_GRID_COLS   = 4
+
+private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont ->
+    addOnSuccessListener { cont.resumeWith(Result.success(it)) }
+    addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+}
 
 // ── Root screen ───────────────────────────────────────────────────────────────
 
@@ -75,15 +84,19 @@ fun LiveFloorPlanScreen(
         onDispose { reg.remove() }
     }
 
-    // Fetch restaurant display name once
+    // Fetch restaurant display name once, on the IO thread
     LaunchedEffect(restaurantId) {
-        FirebaseFirestore.getInstance()
-            .collection("users").document(restaurantId)
-            .collection("restaurant_profile").document("details")
-            .get()
-            .addOnSuccessListener { doc ->
-                restaurantName = doc.getString("restaurantName")?.takeIf { it.isNotBlank() } ?: ""
+        runCatching {
+            withContext(Dispatchers.IO) {
+                FirebaseFirestore.getInstance()
+                    .collection("users").document(restaurantId)
+                    .collection("restaurant_profile").document("details")
+                    .get()
+                    .await()
             }
+        }.onSuccess { doc ->
+            restaurantName = doc.getString("restaurantName")?.takeIf { it.isNotBlank() } ?: ""
+        }
     }
 
     // ── Table tap dialog ─────────────────────────────────────────────────────

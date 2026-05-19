@@ -1,5 +1,6 @@
 package com.example.quickbite.android.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,7 +10,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.TableRestaurant
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,7 +25,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.quickbite.android.services.FirestoreService
+import com.example.quickbite.models.TableStatus
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 private val WBrand       = Color(0xFFE8430A)
 private val WTextDark    = Color(0xFF1C1C1E)
@@ -31,12 +40,25 @@ private val WWhite       = Color(0xFFFFFFFF)
 private val WDivider     = Color(0xFFF0F0F0)
 private val WSuccess     = Color(0xFF34C759)
 private val WActiveTable = Color(0xFFFFF3F0)
+private val WError       = Color(0xFFFF3B30)
 
 private data class ActiveOrder(
     val id: String,
     val tableNumber: Int,
     val items: List<Map<String, Any>>,
-    val timestamp: Long
+    val timestamp: Long,
+    val occupantUid: String? = null
+)
+
+private data class RecentOrder(
+    val id: String,
+    val tableNumber: Int,
+    val items: List<Map<String, Any>>,
+    val totalPrice: Double,
+    val status: String,          // "COMPLETED" or "CANCELLED"
+    val timestamp: Long,
+    val cancelReason: String? = null,
+    val staffNote: String? = null
 )
 
 // ── Root screen ───────────────────────────────────────────────────────────────
@@ -46,9 +68,14 @@ private data class ActiveOrder(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WaiterDashboardScreen(restaurantId: String) {
-    var orders        by remember { mutableStateOf<List<ActiveOrder>>(emptyList()) }
-    var selectedOrder by remember { mutableStateOf<ActiveOrder?>(null) }
-    var isConnected   by remember { mutableStateOf(false) }
+    val scope            = rememberCoroutineScope()
+    var orders           by remember { mutableStateOf<List<ActiveOrder>>(emptyList()) }
+    var selectedOrder    by remember { mutableStateOf<ActiveOrder?>(null) }
+    var isConnected      by remember { mutableStateOf(false) }
+    var showCancelDialog by remember { mutableStateOf(false) }
+    var recentOrders     by remember { mutableStateOf<List<RecentOrder>>(emptyList()) }
+    var selectedTab      by remember { mutableStateOf(0) }
+    var issueOrder       by remember { mutableStateOf<RecentOrder?>(null) }
 
     // Real-time snapshot listener — cleaned up when the composable leaves composition
     DisposableEffect(restaurantId) {
@@ -64,21 +91,125 @@ fun WaiterDashboardScreen(restaurantId: String) {
                     @Suppress("UNCHECKED_CAST")
                     val items = doc.get("items") as? List<Map<String, Any>> ?: emptyList()
                     val ts = doc.getLong("timestamp") ?: 0L
-                    ActiveOrder(id = doc.id, tableNumber = tableNumber, items = items, timestamp = ts)
+                    ActiveOrder(id = doc.id, tableNumber = tableNumber, items = items, timestamp = ts, occupantUid = doc.getString("occupantUid"))
                 } ?: emptyList()
                 // Auto-clear selection when the order disappears (e.g. delivered elsewhere)
-                if (selectedOrder != null && orders.none { it.id == selectedOrder!!.id }) {
+                val current = selectedOrder
+                if (current != null && orders.none { it.id == current.id }) {
                     selectedOrder = null
                 }
             }
         onDispose { reg.remove() }
     }
 
-    fun markDelivered(order: ActiveOrder) {
-        FirebaseFirestore.getInstance()
+    // History listener — same collection, different status filter, client-side time window + sort.
+    // No composite index needed: single-field whereEqualTo + client-side post-filter.
+    DisposableEffect(restaurantId) {
+        val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+        val reg = FirebaseFirestore.getInstance()
             .collection("active_orders")
-            .document(order.id)
-            .update("status", "DELIVERED")
+            .whereEqualTo("restaurantId", restaurantId)
+            .addSnapshotListener { snapshot, _ ->
+                recentOrders = snapshot?.documents?.mapNotNull { doc ->
+                    val status = doc.getString("status") ?: return@mapNotNull null
+                    if (status != "COMPLETED" && status != "CANCELLED") return@mapNotNull null
+                    val ts = doc.getLong("timestamp") ?: 0L
+                    if (ts < cutoff) return@mapNotNull null
+                    val tableNumber = (doc.getLong("tableNumber") ?: return@mapNotNull null).toInt()
+                    @Suppress("UNCHECKED_CAST")
+                    val items = doc.get("items") as? List<Map<String, Any>> ?: emptyList()
+                    RecentOrder(
+                        id           = doc.id,
+                        tableNumber  = tableNumber,
+                        items        = items,
+                        totalPrice   = doc.getDouble("totalPrice") ?: 0.0,
+                        status       = status,
+                        timestamp    = ts,
+                        cancelReason = doc.getString("cancelReason"),
+                        staffNote    = doc.getString("staffNote")
+                    )
+                }?.sortedByDescending { it.timestamp } ?: emptyList()
+            }
+        onDispose { reg.remove() }
+    }
+
+    fun markDelivered(order: ActiveOrder) {
+        scope.launch(Dispatchers.IO) {
+            // Set order to COMPLETED so the client's notification listener fires
+            suspendCancellableCoroutine { cont ->
+                FirebaseFirestore.getInstance()
+                    .collection("active_orders")
+                    .document(order.id)
+                    .update("status", "COMPLETED")
+                    .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
+                    .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+            }
+            // Free the table and clear the session lock so new clients can sit down
+            FirestoreService.updateTableStatusAsync(
+                restaurantId = restaurantId,
+                tableNumber  = order.tableNumber,
+                status       = TableStatus.FREE,
+                occupantUid  = null
+            )
+        }
+    }
+
+    fun cancelOrder(order: ActiveOrder, reason: String, ban: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val db = FirebaseFirestore.getInstance()
+                // Ban the client first so they can't re-enter before table is freed
+                if (ban && order.occupantUid != null) {
+                    suspendCancellableCoroutine { cont ->
+                        db.collection("banned_users")
+                            .document(order.occupantUid)
+                            .set(mapOf(
+                                "uid"          to order.occupantUid,
+                                "reason"       to reason,
+                                "tableNumber"  to order.tableNumber,
+                                "restaurantId" to restaurantId,
+                                "bannedAt"     to System.currentTimeMillis()
+                            ))
+                            .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
+                            .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+                    }
+                }
+                // Mark order as CANCELLED (client session listener will fire and clear the lock)
+                suspendCancellableCoroutine { cont ->
+                    db.collection("active_orders")
+                        .document(order.id)
+                        .update(mapOf("status" to "CANCELLED", "cancelReason" to reason))
+                        .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
+                        .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+                }
+                // Free the table
+                FirestoreService.updateTableStatusAsync(
+                    restaurantId = restaurantId,
+                    tableNumber  = order.tableNumber,
+                    status       = TableStatus.FREE,
+                    occupantUid  = null
+                )
+            } catch (_: Exception) { /* silent — order snapshot listener will correct state */ }
+        }
+    }
+
+    fun resolveIssue(order: RecentOrder, note: String, reopen: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val updates = mutableMapOf<String, Any>()
+                if (note.isNotBlank()) updates["staffNote"] = note
+                if (reopen)           updates["status"]    = "PENDING"
+                if (updates.isEmpty()) return@launch
+                suspendCancellableCoroutine { cont ->
+                    FirebaseFirestore.getInstance()
+                        .collection("active_orders")
+                        .document(order.id)
+                        .update(updates)
+                        .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
+                        .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+                }
+            } catch (_: Exception) { }
+        }
     }
 
     Scaffold(
@@ -123,24 +254,93 @@ fun WaiterDashboardScreen(restaurantId: String) {
             if (maxWidth >= 720.dp) {
                 // ── Two-panel layout (tablet / landscape) ─────────────────────
                 Row(modifier = Modifier.fillMaxSize()) {
+                    // Left: table map + active order list
                     TableGridPanel(
                         modifier = Modifier
-                            .width(340.dp)
+                            .width(300.dp)
                             .fillMaxHeight(),
                         orders = orders,
                         selectedOrder = selectedOrder,
                         onTableClick = { order ->
                             selectedOrder = if (selectedOrder?.id == order?.id) null else order
+                            if (order != null) selectedTab = 0  // jump to active tab on table selection
                         }
                     )
                     Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(WDivider))
-                    OrderDetailPanel(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                        order = selectedOrder,
-                        onMarkDelivered = { markDelivered(it) }
-                    )
+                    // Right: tabbed panel — Tab 0 = active order, Tab 1 = recent history
+                    Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        TabRow(
+                            selectedTabIndex = selectedTab,
+                            containerColor   = WWhite,
+                            contentColor     = WBrand
+                        ) {
+                            Tab(
+                                selected = selectedTab == 0,
+                                onClick  = { selectedTab = 0 },
+                                selectedContentColor   = WBrand,
+                                unselectedContentColor = WTextMuted
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 14.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Rounded.TableRestaurant, null, modifier = Modifier.size(15.dp))
+                                    Text(
+                                        text = "Comandă Activă",
+                                        fontSize = 13.sp,
+                                        fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                            Tab(
+                                selected = selectedTab == 1,
+                                onClick  = { selectedTab = 1 },
+                                selectedContentColor   = WBrand,
+                                unselectedContentColor = WTextMuted
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 14.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Rounded.Schedule, null, modifier = Modifier.size(15.dp))
+                                    Text(
+                                        text = "Comenzi Recente",
+                                        fontSize = 13.sp,
+                                        fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    if (recentOrders.isNotEmpty()) {
+                                        Surface(
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = WTextMuted.copy(alpha = 0.15f)
+                                        ) {
+                                            Text(
+                                                text = recentOrders.size.toString(),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = WTextMuted,
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        when (selectedTab) {
+                            0 -> OrderDetailPanel(
+                                modifier        = Modifier.weight(1f).fillMaxWidth(),
+                                order           = selectedOrder,
+                                onMarkDelivered = { markDelivered(it) },
+                                onCancelOrder   = { showCancelDialog = true }
+                            )
+                            else -> RecentOrdersPanel(
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                orders   = recentOrders,
+                                onIssue  = { issueOrder = it }
+                            )
+                        }
+                    }
                 }
             } else {
                 // ── Single-column layout (phone) ──────────────────────────────
@@ -172,7 +372,26 @@ fun WaiterDashboardScreen(restaurantId: String) {
                                 color = WTextDark
                             )
                         },
-                        text = { OrderItemsList(order.items) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                OrderItemsList(order.items)
+                                OutlinedButton(
+                                    onClick = { showDialog = false; showCancelDialog = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, WError),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = WError)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Block,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Anulează Comanda", fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        },
                         confirmButton = {
                             Button(
                                 onClick = {
@@ -201,6 +420,29 @@ fun WaiterDashboardScreen(restaurantId: String) {
                 }
             }
         }
+    }
+
+    if (showCancelDialog && selectedOrder != null) {
+        CancelOrderDialog(
+            order     = selectedOrder!!,
+            onDismiss = { showCancelDialog = false },
+            onConfirm = { reason, ban ->
+                cancelOrder(selectedOrder!!, reason, ban)
+                showCancelDialog = false
+                selectedOrder    = null
+            }
+        )
+    }
+
+    if (issueOrder != null) {
+        IssueOrderDialog(
+            order     = issueOrder!!,
+            onDismiss = { issueOrder = null },
+            onConfirm = { note, reopen ->
+                resolveIssue(issueOrder!!, note, reopen)
+                issueOrder = null
+            }
+        )
     }
 }
 
@@ -449,7 +691,8 @@ private fun OrderListRow(order: ActiveOrder, isSelected: Boolean, onClick: () ->
 private fun OrderDetailPanel(
     modifier: Modifier,
     order: ActiveOrder?,
-    onMarkDelivered: (ActiveOrder) -> Unit
+    onMarkDelivered: (ActiveOrder) -> Unit,
+    onCancelOrder: (ActiveOrder) -> Unit
 ) {
     if (order == null) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
@@ -560,7 +803,410 @@ private fun OrderDetailPanel(
                 color = WWhite
             )
         }
+
+        OutlinedButton(
+            onClick = { onCancelOrder(order) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, WError),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = WError)
+        ) {
+            Icon(
+                Icons.Rounded.Block,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Anulează Comanda",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
+}
+
+// ── Recent orders panel ───────────────────────────────────────────────────────
+
+@Composable
+private fun RecentOrdersPanel(
+    modifier: Modifier,
+    orders: List<RecentOrder>,
+    onIssue: (RecentOrder) -> Unit
+) {
+    if (orders.isEmpty()) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(Icons.Rounded.Schedule, null, tint = WTextMuted, modifier = Modifier.size(44.dp))
+                Text("Nicio comandă în ultimele 24 de ore", fontSize = 15.sp, color = WTextMuted)
+                Text("Comenzile livrate sau anulate apar aici.", fontSize = 13.sp, color = WTextMuted.copy(alpha = 0.6f))
+            }
+        }
+        return
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "ULTIMELE 24 DE ORE · ${orders.size} comenzi",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = WTextMuted,
+            letterSpacing = 1.sp,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        orders.forEach { order ->
+            RecentOrderRow(order = order, onIssue = { onIssue(order) })
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+// ── Recent order row ──────────────────────────────────────────────────────────
+
+@Composable
+private fun RecentOrderRow(order: RecentOrder, onIssue: () -> Unit) {
+    val isCompleted = order.status == "COMPLETED"
+    val statusColor = if (isCompleted) WSuccess else WError
+    val statusLabel = if (isCompleted) "LIVRAT" else "ANULAT"
+    val timeLabel = remember(order.timestamp) {
+        val mins = ((System.currentTimeMillis() - order.timestamp) / 60_000L).toInt()
+        when {
+            mins < 1   -> "acum câteva sec."
+            mins < 60  -> "acum $mins min"
+            mins < 120 -> "acum 1 oră"
+            else       -> "acum ${mins / 60} ore"
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(WWhite)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f).padding(end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Table badge
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(statusColor.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = order.tableNumber.toString(),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Masă ${order.tableNumber}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = WTextDark)
+                    Surface(shape = RoundedCornerShape(5.dp), color = statusColor.copy(alpha = 0.12f)) {
+                        Text(
+                            text = statusLabel,
+                            fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp,
+                            color = statusColor,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(timeLabel, fontSize = 12.sp, color = WTextMuted)
+                    Text("·", fontSize = 12.sp, color = WTextMuted)
+                    Text(
+                        "${"%.2f".format(order.totalPrice)} RON",
+                        fontSize = 12.sp, color = WTextMuted, fontWeight = FontWeight.Medium
+                    )
+                    Text("·", fontSize = 12.sp, color = WTextMuted)
+                    Text(
+                        "${order.items.size} produs${if (order.items.size != 1) "e" else ""}",
+                        fontSize = 12.sp, color = WTextMuted
+                    )
+                }
+                if (order.cancelReason != null) {
+                    Text(order.cancelReason, fontSize = 11.sp, color = WError.copy(alpha = 0.75f))
+                }
+                if (order.staffNote != null) {
+                    Text("Notă: ${order.staffNote}", fontSize = 11.sp, color = WBrand.copy(alpha = 0.8f))
+                }
+            }
+        }
+        OutlinedButton(
+            onClick = onIssue,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, WBrand.copy(alpha = 0.35f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = WBrand),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Rezolvă", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+// ── Issue / edit order dialog ─────────────────────────────────────────────────
+
+@Composable
+private fun IssueOrderDialog(
+    order: RecentOrder,
+    onDismiss: () -> Unit,
+    onConfirm: (note: String, reopen: Boolean) -> Unit
+) {
+    val isCompleted = order.status == "COMPLETED"
+    val statusColor = if (isCompleted) WSuccess else WError
+    val statusLabel = if (isCompleted) "LIVRAT" else "ANULAT"
+
+    var note   by remember { mutableStateOf(order.staffNote ?: "") }
+    var reopen by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = WWhite,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Masă ${order.tableNumber}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = WTextDark)
+                    Surface(shape = RoundedCornerShape(6.dp), color = statusColor.copy(alpha = 0.12f)) {
+                        Text(
+                            text = statusLabel,
+                            fontSize = 10.sp, fontWeight = FontWeight.Bold, color = statusColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "Total: ${"%.2f".format(order.totalPrice)} RON · ${order.items.size} produs${if (order.items.size != 1) "e" else ""}",
+                    fontSize = 13.sp, color = WTextMuted
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OrderItemsList(order.items)
+
+                if (order.cancelReason != null) {
+                    Text(
+                        "Motiv anulare: ${order.cancelReason}",
+                        fontSize = 12.sp, color = WError.copy(alpha = 0.8f)
+                    )
+                }
+
+                Divider(color = WDivider)
+
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Notă personal (vizibilă intern)", fontSize = 12.sp) },
+                    placeholder = { Text("ex: reclamație client, reducere acordată…", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = WBrand,
+                        unfocusedBorderColor = WDivider,
+                        focusedLabelColor    = WBrand
+                    )
+                )
+
+                // Reopen toggle — only meaningful for CANCELLED orders
+                if (!isCompleted) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (reopen) WSuccess.copy(alpha = 0.07f) else WBgSurface)
+                            .border(1.dp, if (reopen) WSuccess.copy(alpha = 0.3f) else WDivider, RoundedCornerShape(10.dp))
+                            .clickable { reopen = !reopen }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Checkbox(
+                            checked = reopen,
+                            onCheckedChange = { reopen = it },
+                            colors = CheckboxDefaults.colors(checkedColor = WSuccess, checkmarkColor = WWhite)
+                        )
+                        Column {
+                            Text(
+                                "Redeschide comanda",
+                                fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                color = if (reopen) WSuccess else WTextDark
+                            )
+                            Text("Setează statusul înapoi la PENDING", fontSize = 11.sp, color = WTextMuted)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick  = { onConfirm(note, reopen) },
+                enabled  = note.isNotBlank() || reopen,
+                shape    = RoundedCornerShape(12.dp),
+                colors   = ButtonDefaults.buttonColors(containerColor = if (reopen) WSuccess else WBrand)
+            ) {
+                Text(
+                    text = if (reopen) "Redeschide & Salvează" else "Salvează Notă",
+                    color = WWhite, fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Închide", color = WTextMuted) }
+        }
+    )
+}
+
+// ── Cancel & ban dialog ───────────────────────────────────────────────────────
+
+@Composable
+private fun CancelOrderDialog(
+    order: ActiveOrder,
+    onDismiss: () -> Unit,
+    onConfirm: (reason: String, ban: Boolean) -> Unit
+) {
+    val reasons = listOf("Client fugit / Neplată", "Eroare comandă", "Altul")
+    var selectedReason by remember { mutableStateOf(reasons[0]) }
+    var banClient      by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = WWhite,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Anulează Comanda",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = WTextDark
+                )
+                Text(
+                    text = "Masă ${order.tableNumber}",
+                    fontSize = 13.sp,
+                    color = WTextMuted
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "MOTIV ANULARE",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                    color = WTextMuted
+                )
+                Spacer(Modifier.height(4.dp))
+                reasons.forEach { reason ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { selectedReason = reason }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        RadioButton(
+                            selected = selectedReason == reason,
+                            onClick  = { selectedReason = reason },
+                            colors   = RadioButtonDefaults.colors(selectedColor = WBrand)
+                        )
+                        Text(reason, fontSize = 14.sp, color = WTextDark)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Divider(color = WDivider)
+                Spacer(Modifier.height(8.dp))
+
+                // Ban toggle — visually distinct with red accent
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (banClient) WError.copy(alpha = 0.06f) else WBgSurface)
+                        .border(
+                            width = 1.dp,
+                            color = if (banClient) WError.copy(alpha = 0.35f) else WDivider,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable { banClient = !banClient }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Checkbox(
+                        checked = banClient,
+                        onCheckedChange = { banClient = it },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor   = WError,
+                            checkmarkColor = WWhite
+                        )
+                    )
+                    Column {
+                        Text(
+                            text = "Banează clientul (Fraudă)",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (banClient) WError else WTextDark
+                        )
+                        Text(
+                            text = "Adaugă contul pe lista neagră QuickBite",
+                            fontSize = 12.sp,
+                            color = WTextMuted
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(selectedReason, banClient) },
+                shape  = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WError)
+            ) {
+                Text(
+                    text = if (banClient) "Anulează & Banează" else "Anulează Comanda",
+                    color = WWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Înapoi", color = WTextMuted) }
+        }
+    )
 }
 
 // ── Shared: order items list ──────────────────────────────────────────────────

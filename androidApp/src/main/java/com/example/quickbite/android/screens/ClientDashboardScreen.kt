@@ -11,10 +11,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Restaurant
-import androidx.compose.material.icons.rounded.TableRestaurant
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,7 +28,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.tasks.Task
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 // ── Dark / glass colour palette ───────────────────────────────────────────────
 
@@ -41,6 +48,12 @@ private val BrandDim      = Color(0x33E8430A)  // 20 % orange glow
 private val TextPrimary   = Color(0xFFFFFFFF)
 private val TextSecondary = Color(0xFF9A9A9A)
 private val White         = Color(0xFFFFFFFF)
+
+// Converts a Firebase Task to a suspend function, safely cancellable within coroutines
+private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont ->
+    addOnSuccessListener { cont.resumeWith(Result.success(it)) }
+    addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+}
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
@@ -59,28 +72,38 @@ private sealed interface MenuUiState {
     data class Success(val items: List<ClientMenuItem>) : MenuUiState
 }
 
+private data class ActiveSession(val restaurantId: String, val tableNumber: Int)
+
 // ── Root screen ───────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ClientDashboardScreen(
     onNavigateToOrdering: (restaurantId: String, tableNumber: Int) -> Unit,
-    onViewFloorPlan: (restaurantId: String) -> Unit,
     onSignOut: () -> Unit
 ) {
-    var uiState             by remember { mutableStateOf<MenuUiState>(MenuUiState.Loading) }
-    var showQrDialog        by remember { mutableStateOf(false) }
-    var showFloorPlanPicker by remember { mutableStateOf(false) }
-    var restaurantIds       by remember { mutableStateOf<List<String>>(emptyList()) }
-    var restaurantNames     by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var selectedCategory    by remember { mutableStateOf("Toate") }
+    val currentUid       = remember { FirebaseAuth.getInstance().currentUser?.uid }
+    var uiState          by remember { mutableStateOf<MenuUiState>(MenuUiState.Loading) }
+    var showQrDialog     by remember { mutableStateOf(false) }
+    var restaurantIds    by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedCategory by remember { mutableStateOf("Toate") }
+    var activeSession    by remember { mutableStateOf<ActiveSession?>(null) }
+    var sessionChecked   by remember { mutableStateOf(false) }
+    var isBanned         by remember { mutableStateOf(false) }
+    var banChecked       by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        FirebaseFirestore.getInstance()
-            .collectionGroup("restaurant_menu")
-            .get()
-            .addOnSuccessListener { snapshot ->
-                val rawItems = snapshot.documents.mapNotNull { doc ->
+        try {
+            // Fetch and parse the full menu on the IO thread — never blocks the main thread
+            val snapshot = withContext(Dispatchers.IO) {
+                FirebaseFirestore.getInstance()
+                    .collectionGroup("restaurant_menu")
+                    .get()
+                    .await()
+            }
+
+            val rawItems = withContext(Dispatchers.Default) {
+                snapshot.documents.mapNotNull { doc ->
                     val product      = doc.getString("product")  ?: return@mapNotNull null
                     val category     = doc.getString("category") ?: ""
                     val restaurantId = doc.reference.parent.parent?.id ?: return@mapNotNull null
@@ -89,38 +112,85 @@ fun ClientDashboardScreen(
                     val price        = doc.getDouble("price") ?: 0.0
                     ClientMenuItem(product, category, ingredients, restaurantId, price = price)
                 }
+            }
 
-                val uniqueIds = rawItems.map { it.restaurantId }.distinct()
-                restaurantIds = uniqueIds
+            val uniqueIds = rawItems.map { it.restaurantId }.distinct()
+            restaurantIds = uniqueIds
 
-                if (rawItems.isEmpty()) { uiState = MenuUiState.Empty; return@addOnSuccessListener }
+            if (rawItems.isEmpty()) {
+                uiState = MenuUiState.Empty
+                return@LaunchedEffect
+            }
 
-                val nameMap = mutableMapOf<String, String>()
-                var pending = uniqueIds.size
-
-                fun publish() {
-                    val enriched = rawItems.map { item ->
-                        item.copy(restaurantName = nameMap[item.restaurantId] ?: item.restaurantId.take(8))
-                    }
-                    restaurantNames = nameMap.toMap()
-                    uiState = MenuUiState.Success(enriched)
-                }
-
+            // Fetch each restaurant's display name sequentially on IO; avoids pending-counter race
+            val nameMap = mutableMapOf<String, String>()
+            withContext(Dispatchers.IO) {
                 uniqueIds.forEach { rid ->
-                    FirebaseFirestore.getInstance()
-                        .collection("users").document(rid)
-                        .collection("restaurant_profile").document("details")
-                        .get()
-                        .addOnCompleteListener { task ->
-                            nameMap[rid] = if (task.isSuccessful)
-                                task.result?.getString("restaurantName")?.takeIf { it.isNotBlank() } ?: rid.take(8)
-                            else rid.take(8)
-                            pending--
-                            if (pending == 0) publish()
-                        }
+                    nameMap[rid] = runCatching {
+                        FirebaseFirestore.getInstance()
+                            .collection("users").document(rid)
+                            .collection("restaurant_profile").document("details")
+                            .get()
+                            .await()
+                            .getString("restaurantName")
+                            ?.takeIf { it.isNotBlank() }
+                            ?: rid.take(8)
+                    }.getOrElse { rid.take(8) }
                 }
             }
-            .addOnFailureListener { uiState = MenuUiState.Empty }
+
+            val enriched = rawItems.map { item ->
+                item.copy(restaurantName = nameMap[item.restaurantId] ?: item.restaurantId.take(8))
+            }
+            uiState = MenuUiState.Success(enriched)
+
+        } catch (e: CancellationException) {
+            throw e // always rethrow so structured concurrency is preserved
+        } catch (_: Exception) {
+            uiState = MenuUiState.Empty
+        }
+    }
+
+    // Real-time listener: fires instantly when the waiter marks the order done, unlocking the UI
+    DisposableEffect(currentUid) {
+        if (currentUid == null) {
+            sessionChecked = true
+            return@DisposableEffect onDispose {}
+        }
+        val reg = FirebaseFirestore.getInstance()
+            .collection("active_orders")
+            .whereEqualTo("occupantUid", currentUid)
+            .whereEqualTo("status", "PENDING")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    sessionChecked = true
+                    return@addSnapshotListener
+                }
+                activeSession = snapshot?.documents?.firstOrNull()?.let { doc ->
+                    val rid = doc.getString("restaurantId") ?: return@let null
+                    val tbl = doc.getLong("tableNumber")?.toInt() ?: return@let null
+                    ActiveSession(rid, tbl)
+                }
+                sessionChecked = true
+            }
+        onDispose { reg.remove() }
+    }
+
+    // Permanent ban check — document-level listener; resolves instantly from cache if offline
+    DisposableEffect(currentUid) {
+        if (currentUid == null) {
+            banChecked = true
+            return@DisposableEffect onDispose {}
+        }
+        val reg = FirebaseFirestore.getInstance()
+            .collection("banned_users")
+            .document(currentUid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) { banChecked = true; return@addSnapshotListener }
+                isBanned   = snapshot?.exists() == true
+                banChecked = true
+            }
+        onDispose { reg.remove() }
     }
 
     Scaffold(
@@ -140,23 +210,16 @@ fun ClientDashboardScreen(
                     letterSpacing = (-0.3).sp,
                     modifier = Modifier.align(Alignment.CenterStart).padding(vertical = 8.dp)
                 )
-                Row(modifier = Modifier.align(Alignment.CenterEnd)) {
-                    if (restaurantIds.isNotEmpty()) {
-                        IconButton(onClick = {
-                            if (restaurantIds.size == 1) onViewFloorPlan(restaurantIds[0])
-                            else showFloorPlanPicker = true
-                        }) {
-                            Icon(Icons.Rounded.TableRestaurant, contentDescription = "Mese disponibile", tint = White)
-                        }
-                    }
-                    IconButton(onClick = onSignOut) {
-                        Icon(Icons.Rounded.ExitToApp, contentDescription = "Deconectare", tint = White)
-                    }
+                IconButton(
+                    onClick  = onSignOut,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                ) {
+                    Icon(Icons.Rounded.ExitToApp, contentDescription = "Deconectare", tint = White)
                 }
             }
         },
         floatingActionButton = {
-            if (uiState is MenuUiState.Success) {
+            if (uiState is MenuUiState.Success && sessionChecked && activeSession == null && banChecked && !isBanned) {
                 FloatingActionButton(
                     onClick = { showQrDialog = true },
                     containerColor = Brand,
@@ -169,7 +232,20 @@ fun ClientDashboardScreen(
         },
         containerColor = DarkBg
     ) { padding ->
-        when (val state = uiState) {
+        if (!banChecked || !sessionChecked) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator(color = Brand) }
+        } else if (isBanned) {
+            BannedScreen(modifier = Modifier.fillMaxSize().padding(padding))
+        } else if (activeSession != null) {
+            StickySessionScreen(
+                session    = activeSession!!,
+                onContinue = { onNavigateToOrdering(activeSession!!.restaurantId, activeSession!!.tableNumber) },
+                modifier   = Modifier.fillMaxSize().padding(padding)
+            )
+        } else when (val state = uiState) {
             is MenuUiState.Loading -> Box(
                 modifier = Modifier.padding(padding).fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -232,18 +308,6 @@ fun ClientDashboardScreen(
                 }
             }
         }
-    }
-
-    if (showFloorPlanPicker) {
-        RestaurantPickerDialog(
-            restaurantIds   = restaurantIds,
-            restaurantNames = restaurantNames,
-            onDismiss       = { showFloorPlanPicker = false },
-            onConfirm       = { rid ->
-                showFloorPlanPicker = false
-                onViewFloorPlan(rid)
-            }
-        )
     }
 
     if (showQrDialog) {
@@ -598,6 +662,175 @@ private fun QrScanDialog(
     )
 }
 
+// ── Banned screen ─────────────────────────────────────────────────────────────
+
+private val BanRed        = Color(0xFFFF3B30)
+private val BanRedDim     = Color(0x1AFF3B30)  // 10 % red — icon ring fill
+private val BanRedBorder  = Color(0x40FF3B30)  // 25 % red — ring stroke
+private val BanDarkBg     = Color(0xFF100A0A)  // near-black with red undertone
+private val BanInfoBg     = Color(0x0DFF3B30)  // 5 % red — info card fill
+
+@Composable
+private fun BannedScreen(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .background(BanDarkBg)
+            .padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(104.dp)
+                .background(BanRedDim, CircleShape)
+                .border(1.dp, BanRedBorder, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Block,
+                contentDescription = null,
+                tint = BanRed,
+                modifier = Modifier.size(52.dp)
+            )
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        Text(
+            text = "CONT RESTRICȚIONAT",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = BanRed,
+            letterSpacing = 2.sp
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = "Acces Blocat",
+            fontSize = 30.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = TextPrimary,
+            textAlign = TextAlign.Center,
+            letterSpacing = (-0.5).sp
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        Text(
+            text = "Acest cont a fost suspendat din rețeaua QuickBite din cauza neplății unor comenzi anterioare.",
+            fontSize = 15.sp,
+            color = TextSecondary,
+            textAlign = TextAlign.Center,
+            lineHeight = 23.sp
+        )
+
+        Spacer(Modifier.height(36.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(BanInfoBg)
+                .border(1.dp, BanRedBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 18.dp, vertical = 14.dp)
+        ) {
+            Text(
+                text = "Pentru contestații, contactați restaurantul sau suportul QuickBite.",
+                fontSize = 13.sp,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ── Sticky session screen ─────────────────────────────────────────────────────
+
+@Composable
+private fun StickySessionScreen(
+    session: ActiveSession,
+    onContinue: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .background(DarkBg)
+            .padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(100.dp)
+                .background(BrandDim, CircleShape)
+                .border(1.dp, Brand.copy(alpha = 0.5f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Restaurant,
+                contentDescription = null,
+                tint = Brand,
+                modifier = Modifier.size(46.dp)
+            )
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        Text(
+            text = "SESIUNE ACTIVĂ",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = Brand,
+            letterSpacing = 2.sp
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = "Ești la Masa ${session.tableNumber}",
+            fontSize = 30.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = TextPrimary,
+            textAlign = TextAlign.Center,
+            letterSpacing = (-0.5).sp
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        Text(
+            text = "Ai o comandă activă. Adaugă produse sau urmărește statusul comenzii — scanarea QR pentru altă masă este blocată până când chelnerul îți eliberează masa.",
+            fontSize = 14.sp,
+            color = TextSecondary,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp
+        )
+
+        Spacer(Modifier.height(44.dp))
+
+        Button(
+            onClick = onContinue,
+            modifier = Modifier.fillMaxWidth().height(54.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Brand)
+        ) {
+            Text(
+                text = "Continuă Comanda",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = White
+            )
+            Spacer(Modifier.width(10.dp))
+            Icon(
+                imageVector = Icons.Rounded.ArrowForward,
+                contentDescription = null,
+                tint = White,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 @Composable
@@ -624,87 +857,3 @@ private fun EmptyMenuState() {
     }
 }
 
-// ── Restaurant picker dialog (for multi-restaurant floor plan nav) ─────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RestaurantPickerDialog(
-    restaurantIds: List<String>,
-    restaurantNames: Map<String, String>,
-    onDismiss: () -> Unit,
-    onConfirm: (restaurantId: String) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape          = RoundedCornerShape(24.dp),
-        containerColor = Color(0xFF1A1A1A),
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Alege Restaurantul",
-                    fontSize   = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = TextPrimary
-                )
-                Text(
-                    "Selectează restaurantul pentru a vedea mesele disponibile.",
-                    fontSize = 13.sp,
-                    color    = TextSecondary
-                )
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                restaurantIds.forEachIndexed { index, rid ->
-                    val name = restaurantNames[rid]?.takeIf { it.isNotBlank() }
-                        ?: "Restaurant ${index + 1}"
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(GlassWhite)
-                            .border(1.dp, GlassBorder, RoundedCornerShape(14.dp))
-                            .clickable { onConfirm(rid) }
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                    ) {
-                        Row(
-                            verticalAlignment     = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Box(
-                                modifier         = Modifier.size(36.dp).background(BrandDim, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Rounded.Restaurant,
-                                    contentDescription = null,
-                                    tint     = Brand,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Column {
-                                Text(
-                                    name,
-                                    fontSize   = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color      = TextPrimary
-                                )
-                                Text(
-                                    "Atinge pentru a vedea mesele",
-                                    fontSize = 11.sp,
-                                    color    = TextSecondary
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Anulează", color = TextSecondary)
-            }
-        }
-    )
-}

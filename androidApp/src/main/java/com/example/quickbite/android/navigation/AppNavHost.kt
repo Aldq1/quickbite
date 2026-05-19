@@ -104,9 +104,6 @@ fun AppNavHost() {
                 onNavigateToOrdering = { restaurantId, tableNumber ->
                     navController.navigate("client_ordering/$restaurantId/$tableNumber")
                 },
-                onViewFloorPlan = { restaurantId ->
-                    navController.navigate("live_floor_plan/$restaurantId")
-                },
                 onSignOut = signOut
             )
         }
@@ -121,14 +118,10 @@ fun AppNavHost() {
             val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: return@composable
             val tableNumber  = backStackEntry.arguments?.getInt("tableNumber") ?: 1
             ClientOrderingScreen(
-                restaurantId = restaurantId,
-                tableNumber  = tableNumber,
-                onOrderPlaced = {
-                    navController.popBackStack()
-                },
-                onBack = {
-                    navController.popBackStack()
-                }
+                restaurantId  = restaurantId,
+                tableNumber   = tableNumber,
+                onOrderPlaced = { navController.popBackStack() },
+                onBack        = { navController.popBackStack() }
             )
         }
 
