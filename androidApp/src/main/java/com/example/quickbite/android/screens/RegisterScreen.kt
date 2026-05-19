@@ -128,10 +128,13 @@ fun RegisterScreen(
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = RegBrand,
+                        focusedBorderColor   = RegBrand,
                         unfocusedBorderColor = RegBorderIdle,
-                        focusedLabelColor = RegBrand,
-                        cursorColor = RegBrand
+                        focusedLabelColor    = RegBrand,
+                        unfocusedLabelColor  = RegTextMuted,
+                        cursorColor          = RegBrand,
+                        focusedTextColor     = RegTextDark,
+                        unfocusedTextColor   = RegTextDark
                     ),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -164,10 +167,13 @@ fun RegisterScreen(
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = RegBrand,
+                        focusedBorderColor   = RegBrand,
                         unfocusedBorderColor = RegBorderIdle,
-                        focusedLabelColor = RegBrand,
-                        cursorColor = RegBrand
+                        focusedLabelColor    = RegBrand,
+                        unfocusedLabelColor  = RegTextMuted,
+                        cursorColor          = RegBrand,
+                        focusedTextColor     = RegTextDark,
+                        unfocusedTextColor   = RegTextDark
                     ),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()

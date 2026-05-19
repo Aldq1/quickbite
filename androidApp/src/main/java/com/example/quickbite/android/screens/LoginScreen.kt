@@ -131,10 +131,13 @@ fun LoginScreen(
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Brand,
+                        focusedBorderColor   = Brand,
                         unfocusedBorderColor = BorderIdle,
-                        focusedLabelColor = Brand,
-                        cursorColor = Brand
+                        focusedLabelColor    = Brand,
+                        unfocusedLabelColor  = TextMuted,
+                        cursorColor          = Brand,
+                        focusedTextColor     = TextDark,
+                        unfocusedTextColor   = TextDark
                     ),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -167,10 +170,13 @@ fun LoginScreen(
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Brand,
+                        focusedBorderColor   = Brand,
                         unfocusedBorderColor = BorderIdle,
-                        focusedLabelColor = Brand,
-                        cursorColor = Brand
+                        focusedLabelColor    = Brand,
+                        unfocusedLabelColor  = TextMuted,
+                        cursorColor          = Brand,
+                        focusedTextColor     = TextDark,
+                        unfocusedTextColor   = TextDark
                     ),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
