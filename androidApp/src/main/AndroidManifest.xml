@@ -1,17 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Required for Firebase and Google Maps -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="false"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
+
+        <!--
+            Google Maps API Key.
+            Add  MAPS_API_KEY=<your-key>  to local.properties, then sync.
+            Obtain a key at: https://console.cloud.google.com/apis/credentials
+            Enable "Maps SDK for Android" in your Google Cloud project.
+        -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
+
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Deep link from QR codes: quickbite://order/{restaurantId}/{tableNumber} -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="quickbite" android:host="order" />
+            </intent-filter>
         </activity>
     </application>
-</manifest> 
+</manifest>

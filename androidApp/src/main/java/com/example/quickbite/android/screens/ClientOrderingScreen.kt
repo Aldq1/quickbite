@@ -1,5 +1,6 @@
 package com.example.quickbite.android.screens
 
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -204,7 +205,7 @@ fun ClientOrderingScreen(
             }
             scope.launch(Dispatchers.IO) {
                 try {
-                    // Write directly — no compound query (avoids missing Firestore index errors)
+                    Log.d("QuickBite", "Placing order: restaurantId=$restaurantId table=$tableNumber items=${orderItems.size} total=$totalPrice")
                     val docRef = FirebaseFirestore.getInstance()
                         .collection("active_orders")
                         .add(mapOf(
@@ -216,6 +217,7 @@ fun ClientOrderingScreen(
                             "status"       to "PENDING",
                             "timestamp"    to System.currentTimeMillis()
                         )).await()
+                    Log.d("QuickBite", "Order written successfully: id=${docRef.id}")
                     FirestoreService.updateTableStatusAsync(
                         restaurantId, tableNumber, TableStatus.OCCUPIED, occupantUid = currentUid
                     )
@@ -229,7 +231,8 @@ fun ClientOrderingScreen(
                     }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    Log.e("QuickBite", "Order write failed: restaurantId=$restaurantId table=$tableNumber", e)
                     withContext(Dispatchers.Main) {
                         isPlacing = false
                         Toast.makeText(context, "Eroare la plasarea comenzii.", Toast.LENGTH_SHORT).show()
