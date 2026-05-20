@@ -10,6 +10,10 @@ lifecycleRuntimeCompose = "2.9.1"
 navigationCompose = "2.9.0"
 # Adăugăm o versiune stabilă de Firebase BoM compatibilă cu Kotlin 2.0.0
 firebaseBom = "32.8.0"
+# Google Maps Compose
+mapsCompose        = "4.3.3"
+playServicesMaps   = "18.2.0"
+playServicesLocation = "21.2.0"
 
 [libraries]
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleRuntimeCompose" }
@@ -20,6 +24,11 @@ firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "fir
 firebase-analytics = { module = "com.google.firebase:firebase-analytics" }
 firebase-auth = { module = "com.google.firebase:firebase-auth-ktx" }
 firebase-firestore = { module = "com.google.firebase:firebase-firestore-ktx" }
+
+# Google Maps
+maps-compose            = { module = "com.google.maps.android:maps-compose",            version.ref = "mapsCompose" }
+play-services-maps      = { module = "com.google.android.gms:play-services-maps",       version.ref = "playServicesMaps" }
+play-services-location  = { module = "com.google.android.gms:play-services-location",   version.ref = "playServicesLocation" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }

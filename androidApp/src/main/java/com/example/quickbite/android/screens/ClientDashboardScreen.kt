@@ -74,6 +74,37 @@ private sealed interface MenuUiState {
 
 private data class ActiveSession(val restaurantId: String, val tableNumber: Int)
 
+// ── Demo / offline mock data ──────────────────────────────────────────────────
+
+internal const val DEMO_RESTAURANT_ID = "demo_quickbite_central"
+
+private val DEMO_CLIENT_ITEMS = listOf(
+    ClientMenuItem("Burger QuickBite Epic",       "Burgeri",
+        listOf(mapOf("name" to "Carne vită", "weight" to "200g"), mapOf("name" to "Cheddar aged", "weight" to "40g"), mapOf("name" to "Bacon crispy", "weight" to "30g"), mapOf("name" to "Sos special QB")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 42.00),
+    ClientMenuItem("Pizza Quattro Formaggi",      "Pizza",
+        listOf(mapOf("name" to "Mozzarella", "weight" to "100g"), mapOf("name" to "Gorgonzola", "weight" to "40g"), mapOf("name" to "Parmezan", "weight" to "30g"), mapOf("name" to "Blat crocant pe vatră")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 49.00),
+    ClientMenuItem("Somon Gravlax cu Avocado",    "Pește",
+        listOf(mapOf("name" to "File somon marinat", "weight" to "180g"), mapOf("name" to "Cremă avocado", "weight" to "60g"), mapOf("name" to "Capere & lemon zest")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 56.00),
+    ClientMenuItem("Cartofi cu Parmezan & Trufe", "Garnituri",
+        listOf(mapOf("name" to "Cartofi belgieni", "weight" to "250g"), mapOf("name" to "Ulei de trufe", "weight" to "10ml"), mapOf("name" to "Rozmarin proaspăt")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 18.00),
+    ClientMenuItem("Limonadă cu Mentă",           "Băuturi",
+        listOf(mapOf("name" to "Lămâie stoarsă", "weight" to "2 buc"), mapOf("name" to "Sirop mentă", "weight" to "30ml"), mapOf("name" to "Apă carbogazoasă 500ml")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 15.00),
+    ClientMenuItem("Tiramisu de Casă",            "Deserturi",
+        listOf(mapOf("name" to "Mascarpone", "weight" to "120g"), mapOf("name" to "Espresso", "weight" to "60ml"), mapOf("name" to "Cacao Valrhona", "weight" to "15g")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 22.00),
+    ClientMenuItem("Sparanghel la Grătar",        "Intrări",
+        listOf(mapOf("name" to "Sparanghel verde", "weight" to "200g"), mapOf("name" to "Sos hollandaise", "weight" to "50ml"), mapOf("name" to "Ou poché")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 32.00),
+    ClientMenuItem("Flat White Premium",          "Cafea",
+        listOf(mapOf("name" to "Dublu espresso", "weight" to "60ml"), mapOf("name" to "Lapte oat texturat", "weight" to "150ml")),
+        DEMO_RESTAURANT_ID, "QuickBite Central", 14.00),
+)
+
 // ── Root screen ───────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,7 +149,9 @@ fun ClientDashboardScreen(
             restaurantIds = uniqueIds
 
             if (rawItems.isEmpty()) {
-                uiState = MenuUiState.Empty
+                // No Firestore data — fall back to demo content so the app is never empty
+                restaurantIds = listOf(DEMO_RESTAURANT_ID)
+                uiState = MenuUiState.Success(DEMO_CLIENT_ITEMS)
                 return@LaunchedEffect
             }
 
@@ -147,7 +180,9 @@ fun ClientDashboardScreen(
         } catch (e: CancellationException) {
             throw e // always rethrow so structured concurrency is preserved
         } catch (_: Exception) {
-            uiState = MenuUiState.Empty
+            // Network/Firestore error — show demo content so the screen is never blank
+            restaurantIds = listOf(DEMO_RESTAURANT_ID)
+            uiState = MenuUiState.Success(DEMO_CLIENT_ITEMS)
         }
     }
 
@@ -489,7 +524,7 @@ private fun GlassMenuItemCard(item: ClientMenuItem) {
         // ── Ingredients ───────────────────────────────────────────────────────
         if (item.ingredients.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
-            Divider(color = GlassDivider)
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(GlassDivider))
             Spacer(Modifier.height(12.dp))
             Text(
                 text = "INGREDIENTE",

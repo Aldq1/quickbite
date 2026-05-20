@@ -18,6 +18,7 @@ data class Order(
 
 object OrderStatus {
     const val PENDING   = "PENDING"
+    const val COOKING   = "COOKING"    // kitchen accepted, in preparation
     const val DELIVERED = "DELIVERED"
     const val COMPLETED = "COMPLETED"
 }

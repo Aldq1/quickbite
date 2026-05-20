@@ -25,6 +25,9 @@ kotlin {
                 // Firebase Admin SDK — provides Firestore with real-time gRPC listeners on JVM.
                 // Requires a service-account.json (see Main.kt for the lookup order).
                 implementation("com.google.firebase:firebase-admin:9.3.0")
+
+                // ZXing QR code generation (QrManagerScreen)
+                implementation("com.google.zxing:core:3.5.3")
             }
         }
     }
