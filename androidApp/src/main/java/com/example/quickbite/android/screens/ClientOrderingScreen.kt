@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quickbite.android.services.FirestoreService
+import com.example.quickbite.models.OrderStatus
 import com.example.quickbite.models.TableStatus
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
@@ -198,41 +199,69 @@ fun ClientOrderingScreen(
     val placeOrder: () -> Unit = {
         if (currentUid != null && !isPlacing && !tableOccupied) {
             isPlacing = true
-            val capturedCount = cartTotal
-            val totalPrice    = cartItems.sumOf { it.price * it.quantity }
-            val orderItems: List<Map<String, Any>> = cartItems.map { item ->
-                mapOf("name" to item.name, "category" to item.category, "quantity" to item.quantity)
+            val capturedCount  = cartTotal
+            val uid            = currentUid          // captured as non-null String in this branch
+            val capturedRid    = restaurantId        // same value the table-status write uses
+            val capturedTable  = tableNumber
+            val totalPrice     = cartItems.sumOf { it.price * it.quantity }
+
+            // Explicit HashMap<String, Any> per item — no Kotlin data-class serialisation,
+            // no nullable types, no Firestore reflection. Plain Java Map the SDK can't choke on.
+            val serializedItems: List<HashMap<String, Any>> = cartItems.map { item ->
+                hashMapOf(
+                    "name"     to item.name,
+                    "category" to item.category,
+                    "price"    to item.price,
+                    "quantity" to item.quantity
+                )
             }
+
             scope.launch(Dispatchers.IO) {
                 try {
-                    Log.d("QuickBite", "Placing order: restaurantId=$restaurantId table=$tableNumber items=${orderItems.size} total=$totalPrice")
-                    val docRef = FirebaseFirestore.getInstance()
-                        .collection("active_orders")
-                        .add(mapOf(
-                            "restaurantId" to restaurantId,
-                            "tableNumber"  to tableNumber,
-                            "occupantUid"  to currentUid,
-                            "items"        to orderItems,
-                            "totalPrice"   to totalPrice,
-                            "status"       to "PENDING",
-                            "timestamp"    to System.currentTimeMillis()
-                        )).await()
-                    Log.d("QuickBite", "Order written successfully: id=${docRef.id}")
-                    FirestoreService.updateTableStatusAsync(
-                        restaurantId, tableNumber, TableStatus.OCCUPIED, occupantUid = currentUid
+                    // Pre-generate the document ID so success/failure logs carry the same ID.
+                    val orderId   = java.util.UUID.randomUUID().toString()
+                    val orderData = hashMapOf<String, Any>(
+                        "restaurantId" to capturedRid,
+                        "tableNumber"  to capturedTable,
+                        "occupantUid"  to uid,
+                        "items"        to serializedItems,
+                        "totalPrice"   to totalPrice,
+                        "status"       to OrderStatus.PENDING,
+                        "timestamp"    to System.currentTimeMillis()
                     )
-                    val orderId = docRef.id
+
+                    println("FIREBASE_WRITE_ATTEMPT: collection=orders id=$orderId restaurantId=$capturedRid table=$capturedTable items=${serializedItems.size} total=$totalPrice status=${OrderStatus.PENDING}")
+                    Log.d("QuickBite", "FIREBASE_WRITE_ATTEMPT: id=$orderId restaurantId=$capturedRid table=$capturedTable")
+
+                    // Use .document(id).set() + explicit listeners to avoid the Task<Void>
+                    // null-return issue that kills the generic .await() extension silently.
+                    suspendCancellableCoroutine<Unit> { cont ->
+                        FirebaseFirestore.getInstance()
+                            .collection("orders")
+                            .document(orderId)
+                            .set(orderData)
+                            .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
+                            .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+                    }
+
+                    println("FIREBASE_WRITE_SUCCESS: Order successfully added to Firestore! id=$orderId restaurantId=$capturedRid table=$capturedTable status=${OrderStatus.PENDING}")
+                    Log.d("QuickBite", "FIREBASE_WRITE_SUCCESS: id=$orderId")
+
+                    FirestoreService.updateTableStatusAsync(
+                        capturedRid, capturedTable, TableStatus.OCCUPIED, occupantUid = uid
+                    )
                     withContext(Dispatchers.Main) {
                         placedItemCount = capturedCount
                         cartItems.clear()
-                        placedOrderId = orderId
-                        isPlacing     = false
+                        placedOrderId   = orderId
+                        isPlacing       = false
                         Toast.makeText(context, "Comanda a fost plasată!", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.e("QuickBite", "Order write failed: restaurantId=$restaurantId table=$tableNumber", e)
+                    println("FIREBASE_WRITE_ERROR: Failed with exception: ${e.javaClass.simpleName}: ${e.message} | restaurantId=$capturedRid table=$capturedTable")
+                    Log.e("QuickBite", "FIREBASE_WRITE_ERROR: restaurantId=$capturedRid table=$capturedTable", e)
                     withContext(Dispatchers.Main) {
                         isPlacing = false
                         Toast.makeText(context, "Eroare la plasarea comenzii.", Toast.LENGTH_SHORT).show()

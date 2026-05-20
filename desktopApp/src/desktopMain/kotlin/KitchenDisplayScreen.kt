@@ -66,14 +66,14 @@ fun KitchenDisplayScreen(modifier: Modifier = Modifier, db: Firestore, restauran
         orders    = kdsOrders,
         onAccept  = { order ->
             scope.launch {
-                db.collection("active_orders").document(order.id)
+                db.collection("orders").document(order.id)
                     .update("status", OrderStatus.COOKING)
             }
         },
         onReady   = { order ->
             // COOKING → DELIVERED: ticket leaves KDS and appears as "GATA DE SERVIT" on Waiter panel
             scope.launch {
-                db.collection("active_orders").document(order.id)
+                db.collection("orders").document(order.id)
                     .update("status", OrderStatus.DELIVERED)
             }
         }
@@ -429,12 +429,27 @@ private fun KdsEmptyState(modifier: Modifier) {
 // ── Firestore flow: PENDING + COOKING orders ──────────────────────────────────
 
 private fun kdsOrdersFlow(db: Firestore, restaurantId: String): Flow<List<Order>> = callbackFlow {
-    val registration = db.collection("active_orders")
+    val registration = db.collection("orders")
         .whereEqualTo("restaurantId", restaurantId)
         .addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null) return@addSnapshotListener
+            if (error != null) {
+                println("DESKTOP KDS ERROR: Firestore listener error — ${error.javaClass.simpleName}: ${error.message}")
+                return@addSnapshotListener
+            }
+            if (snapshot == null) {
+                println("DESKTOP KDS: Snapshot is null")
+                return@addSnapshotListener
+            }
+            println("DESKTOP KDS: Snapshot received with ${snapshot.documents.size} documents for restaurantId=$restaurantId")
             val active = snapshot.documents
-                .mapNotNull { it.toOrder() }
+                .mapNotNull { doc ->
+                    try {
+                        doc.toOrder()
+                    } catch (e: Exception) {
+                        println("DESKTOP KDS ERROR: Failed to parse document ${doc.id} — ${e.javaClass.simpleName}: ${e.message}")
+                        null
+                    }
+                }
                 .filter { it.status == OrderStatus.PENDING || it.status == OrderStatus.COOKING }
                 .sortedBy { it.timestamp }
             trySend(active)

@@ -110,7 +110,7 @@ fun QrManagerScreen(modifier: Modifier = Modifier, restaurantId: String = "") {
                         onClick = {
                             val num = tableInput.trim().toIntOrNull()
                             if (num == null || num < 1) { hasError = true; return@Button }
-                            val rid  = restaurantId.ifBlank { "demo_quickbite_central" }
+                            val rid  = restaurantId.ifBlank { "7QBG68DH1bciyywUTt1klkoyzwv2" }
                             val link = "quickbite://order/$rid/$num"
                             val img  = renderQrBufferedImage(link)
                             qrRawImage = img

@@ -13,7 +13,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 
 // Demo restaurant ID used when Firestore has no data or the role is CLIENT
-private const val DEMO_ID = "demo_quickbite_central"
+private const val DEMO_ID = "7QBG68DH1bciyywUTt1klkoyzwv2"
 
 @Composable
 fun HomeScreen(navController: NavController) {

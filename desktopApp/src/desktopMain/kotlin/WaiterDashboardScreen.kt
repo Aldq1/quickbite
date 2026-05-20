@@ -72,14 +72,18 @@ fun WaiterApp(db: Firestore?) {
     when {
         db == null             -> WaiterDashboardMockScreen()   // demo / offline mode
         restaurantId.isBlank() -> RestaurantSetupScreen { id -> saveRestaurantId(id); restaurantId = id }
-        else                   -> WaiterDashboardScreen(db = db, restaurantId = restaurantId)
+        else                   -> WaiterDashboardScreen(
+            db           = db,
+            restaurantId = restaurantId,
+            onLogout     = { clearSavedRestaurantId(); restaurantId = "" }
+        )
     }
 }
 
 // ── Live Firestore dashboard ──────────────────────────────────────────────────
 
 @Composable
-fun WaiterDashboardScreen(db: Firestore, restaurantId: String) {
+fun WaiterDashboardScreen(db: Firestore, restaurantId: String, onLogout: () -> Unit = {}) {
     var orders        by remember { mutableStateOf<List<Order>>(emptyList()) }
     var tableStatuses by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var selectedTable by remember { mutableStateOf<Int?>(null) }
@@ -109,16 +113,34 @@ fun WaiterDashboardScreen(db: Firestore, restaurantId: String) {
         orders.filter { it.status == OrderStatus.COMPLETED }.sortedByDescending { it.timestamp }
     }
 
+    // Merge orders-derived occupancy with the Firestore tables collection.
+    // A table with any non-COMPLETED order is always shown as OCCUPIED, even if the
+    // tables sub-collection hasn't been written yet (race) or is missing entirely.
+    // Firestore wins for PAYMENT_REQUESTED and for explicit FREE marks (waiter freed it).
+    val mergedTableStatuses: Map<Int, String> = remember(tableStatuses, orders) {
+        val activeTableNums = orders
+            .filter { it.status != OrderStatus.COMPLETED }
+            .map { it.tableNumber }.toSet()
+        (tableStatuses.keys + activeTableNums).associateWith { num ->
+            val fs = tableStatuses[num]
+            when {
+                fs != null && fs != TableStatus.FREE -> fs          // Firestore: OCCUPIED / PAYMENT_REQUESTED
+                num in activeTableNums               -> TableStatus.OCCUPIED  // order exists → show occupied
+                else                                 -> TableStatus.FREE
+            }
+        }
+    }
+
     WaiterDashboardScaffold(
-        topBar        = { DashboardTopBar(isLive = isLive, pendingCount = pendingCount) },
+        topBar        = { DashboardTopBar(isLive = isLive, pendingCount = pendingCount, onLogout = onLogout) },
         activeTab     = activeTab,
         onTabChange   = { activeTab = it },
         tableMapContent = {
             val selectedOrders     = orders.filter { it.tableNumber == selectedTable }
-            val currentTableStatus = tableStatuses[selectedTable] ?: TableStatus.FREE
+            val currentTableStatus = mergedTableStatuses[selectedTable] ?: TableStatus.FREE
             TableMapTab(
                 allOrders      = orders,
-                tableStatuses  = tableStatuses,
+                tableStatuses  = mergedTableStatuses,
                 selectedTable  = selectedTable,
                 onTableClick   = { t -> selectedTable = if (selectedTable == t) null else t },
                 orders         = selectedOrders,
@@ -145,7 +167,7 @@ fun WaiterDashboardScreen(db: Firestore, restaurantId: String) {
                         }
                         scope.launch {
                             active.forEach { order ->
-                                db.collection("active_orders").document(order.id)
+                                db.collection("orders").document(order.id)
                                     .update("status", OrderStatus.COMPLETED)
                             }
                             db.collection("users").document(restaurantId)
@@ -329,7 +351,7 @@ private fun TableMapTab(
 // ── Top bars ──────────────────────────────────────────────────────────────────
 
 @Composable
-private fun DashboardTopBar(isLive: Boolean, pendingCount: Int) {
+private fun DashboardTopBar(isLive: Boolean, pendingCount: Int, onLogout: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -345,6 +367,14 @@ private fun DashboardTopBar(isLive: Boolean, pendingCount: Int) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             if (pendingCount > 0) StatusPill("$pendingCount ${if (pendingCount != 1) "comenzi noi" else "comandă nouă"}", Red)
             LiveIndicator(isLive = isLive)
+            IconButton(onClick = onLogout) {
+                Icon(
+                    imageVector        = Icons.Rounded.ExitToApp,
+                    contentDescription = "Logout / Reset session",
+                    tint               = Muted,
+                    modifier           = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }
@@ -904,11 +934,35 @@ fun RestaurantSetupScreen(onConfirm: (String) -> Unit) {
 // ── Firestore flows ───────────────────────────────────────────────────────────
 
 private fun ordersFlow(db: Firestore, restaurantId: String): Flow<List<Order>> = callbackFlow {
-    val registration = db.collection("active_orders")
+    val registration = db.collection("orders")
         .whereEqualTo("restaurantId", restaurantId)
         .addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null) return@addSnapshotListener
-            trySend(snapshot.documents.mapNotNull { it.toOrder() })
+            if (error != null) {
+                println("DESKTOP WAITER ERROR: Firestore listener error — ${error.javaClass.simpleName}: ${error.message}")
+                return@addSnapshotListener
+            }
+            if (snapshot == null) {
+                println("DESKTOP WAITER: Snapshot is null")
+                return@addSnapshotListener
+            }
+            println("DESKTOP WAITER: Snapshot received with ${snapshot.documents.size} documents for restaurantId=$restaurantId")
+            val parsed = snapshot.documents.mapNotNull { doc ->
+                try {
+                    doc.toOrder()
+                } catch (e: Exception) {
+                    println("DESKTOP WAITER ERROR: Failed to parse document ${doc.id} — ${e.javaClass.simpleName}: ${e.message}")
+                    null
+                }
+            }
+            println(
+                "DESKTOP WAITER BREAKDOWN: " +
+                "PENDING=${parsed.count { it.status == OrderStatus.PENDING }} " +
+                "COOKING=${parsed.count { it.status == OrderStatus.COOKING }} " +
+                "DELIVERED=${parsed.count { it.status == OrderStatus.DELIVERED }} " +
+                "COMPLETED=${parsed.count { it.status == OrderStatus.COMPLETED }} " +
+                "of ${snapshot.documents.size} docs"
+            )
+            trySend(parsed)
         }
     awaitClose { registration.remove() }
 }
@@ -930,32 +984,101 @@ private fun tableStatusFlow(db: Firestore, restaurantId: String): Flow<Map<Int, 
     awaitClose { registration.remove() }
 }
 
+// Coerce any numeric type the Admin SDK might return to Long / Double.
+private fun Any?.toLongSafe(): Long? = when (this) {
+    is Long   -> this
+    is Int    -> this.toLong()
+    is Double -> this.toLong()
+    is Number -> this.toLong()
+    else      -> null
+}
+
+private fun Any?.toDoubleSafe(): Double? = when (this) {
+    is Double -> this
+    is Long   -> this.toDouble()
+    is Int    -> this.toDouble()
+    is Number -> this.toDouble()
+    else      -> null
+}
+
 internal fun DocumentSnapshot.toOrder(): Order? {
-    val tableNumber  = getLong("tableNumber")?.toInt() ?: return null
-    val restaurantId = getString("restaurantId")        ?: return null
-    val status       = getString("status")              ?: OrderStatus.PENDING
-    val timestamp    = getLong("timestamp")             ?: 0L
-    @Suppress("UNCHECKED_CAST")
-    val rawItems = get("items") as? List<Map<String, Any>> ?: emptyList()
-    val items = rawItems.mapNotNull { map ->
-        val name = map["name"] as? String     ?: return@mapNotNull null
-        val cat  = map["category"] as? String ?: ""
-        val qty  = when (val q = map["quantity"]) {
-            is Long -> q.toInt()
-            is Int  -> q
-            else    -> 1
+    val docId = id
+    return try {
+        // Raw field extraction — using get() so we see the actual Java type
+        val rawTableNumber  = get("tableNumber")
+        val rawRestaurantId = get("restaurantId")
+        val rawStatus       = get("status")
+        val rawTimestamp    = get("timestamp")
+        val rawTotalPrice   = get("totalPrice")
+        val rawItems        = get("items")
+
+        println(
+            "DESKTOP PARSE: doc=$docId | " +
+            "tableNumber=$rawTableNumber(${rawTableNumber?.javaClass?.simpleName}) | " +
+            "restaurantId=$rawRestaurantId | " +
+            "status=$rawStatus | " +
+            "timestamp=$rawTimestamp(${rawTimestamp?.javaClass?.simpleName}) | " +
+            "totalPrice=$rawTotalPrice | " +
+            "items=${rawItems?.javaClass?.simpleName}"
+        )
+
+        val tableNumber = rawTableNumber.toLongSafe()?.toInt()
+        if (tableNumber == null) {
+            println("DESKTOP SKIP: doc=$docId — tableNumber missing or non-numeric (${rawTableNumber?.javaClass?.simpleName}: $rawTableNumber)")
+            return null
         }
-        OrderItem(name = name, category = cat, quantity = qty)
+
+        val restaurantId = rawRestaurantId as? String
+        if (restaurantId == null) {
+            println("DESKTOP SKIP: doc=$docId — restaurantId missing or not a String (${rawRestaurantId?.javaClass?.simpleName}: $rawRestaurantId)")
+            return null
+        }
+
+        val status: String = rawStatus as? String ?: run {
+            println("DESKTOP WARN: doc=$docId — status missing, defaulting to PENDING")
+            OrderStatus.PENDING
+        }
+
+        // timestamp is written by Android as System.currentTimeMillis() (Long),
+        // but guard against Firestore Timestamp objects just in case.
+        val timestamp: Long = when {
+            rawTimestamp is Long   -> rawTimestamp
+            rawTimestamp is Number -> rawTimestamp.toLong()
+            rawTimestamp != null   -> try {
+                val date = rawTimestamp.javaClass.getMethod("toDate").invoke(rawTimestamp) as? java.util.Date
+                date?.time ?: 0L
+            } catch (e: Exception) {
+                println("DESKTOP WARN: doc=$docId — could not read timestamp from ${rawTimestamp.javaClass.simpleName}: ${e.message}")
+                0L
+            }
+            else -> 0L
+        }
+
+        val totalPrice = rawTotalPrice.toDoubleSafe() ?: 0.0
+
+        val rawItemsList = rawItems as? List<*> ?: emptyList<Any>()
+        val items = rawItemsList.mapNotNull { element ->
+            val map  = element as? Map<*, *> ?: return@mapNotNull null
+            val name = map["name"] as? String ?: return@mapNotNull null
+            val cat  = map["category"] as? String ?: ""
+            val qty  = map["quantity"].toLongSafe()?.toInt() ?: 1
+            OrderItem(name = name, category = cat, quantity = qty)
+        }
+
+        println("DESKTOP SUCCESS: Parsed order $docId | status=$status | table=$tableNumber | items=${items.size} | restaurantId=$restaurantId")
+        Order(
+            id           = docId,
+            restaurantId = restaurantId,
+            tableNumber  = tableNumber,
+            items        = items,
+            totalPrice   = totalPrice,
+            status       = status,
+            timestamp    = timestamp
+        )
+    } catch (e: Exception) {
+        println("DESKTOP PARSE ERROR: doc=$docId — ${e.javaClass.simpleName}: ${e.message}")
+        null
     }
-    return Order(
-        id           = id,
-        restaurantId = restaurantId,
-        tableNumber  = tableNumber,
-        items        = items,
-        totalPrice   = getDouble("totalPrice") ?: 0.0,
-        status       = status,
-        timestamp    = timestamp
-    )
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -997,6 +1120,10 @@ private fun loadSavedRestaurantId(): String =
 
 private fun saveRestaurantId(id: String) {
     try { configFile.parentFile?.mkdirs(); configFile.writeText(id) } catch (_: Exception) { }
+}
+
+private fun clearSavedRestaurantId() {
+    try { configFile.writeText("") } catch (_: Exception) { }
 }
 
 // ── Order history panel ───────────────────────────────────────────────────────

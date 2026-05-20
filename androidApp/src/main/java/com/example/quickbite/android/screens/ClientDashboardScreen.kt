@@ -76,7 +76,7 @@ private data class ActiveSession(val restaurantId: String, val tableNumber: Int)
 
 // ── Demo / offline mock data ──────────────────────────────────────────────────
 
-internal const val DEMO_RESTAURANT_ID = "demo_quickbite_central"
+internal const val DEMO_RESTAURANT_ID = "7QBG68DH1bciyywUTt1klkoyzwv2"
 
 private val DEMO_CLIENT_ITEMS = listOf(
     ClientMenuItem("Burger QuickBite Epic",       "Burgeri",
@@ -193,7 +193,7 @@ fun ClientDashboardScreen(
             return@DisposableEffect onDispose {}
         }
         val reg = FirebaseFirestore.getInstance()
-            .collection("active_orders")
+            .collection("orders")
             .whereEqualTo("occupantUid", currentUid)
             .whereEqualTo("status", "PENDING")
             .addSnapshotListener { snapshot, error ->
@@ -581,6 +581,14 @@ private fun QrScanDialog(
     var selectedRestaurantId by remember { mutableStateOf(restaurantIds.firstOrNull() ?: "") }
     var tableInput           by remember { mutableStateOf("1") }
     var expanded             by remember { mutableStateOf(false) }
+
+    // If the Firestore query finishes after the dialog is already open, the `remember` above
+    // won't re-run. Pick up the first real result as soon as it arrives.
+    LaunchedEffect(restaurantIds) {
+        if (selectedRestaurantId.isBlank() && restaurantIds.isNotEmpty()) {
+            selectedRestaurantId = restaurantIds.first()
+        }
+    }
 
     val tableNumber = tableInput.toIntOrNull()?.coerceIn(1, 99) ?: 1
 
