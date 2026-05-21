@@ -45,6 +45,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -87,7 +89,8 @@ private val EnterpriseColorScheme = darkColorScheme(
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
 enum class AppRole { NONE, RESTAURANT_ADMIN, PRODUCER, CANDIDATE, KYC_AGENT }
-private enum class AdminTab { OPERATIONAL, ACQUISITIONS, RECRUITMENT }
+private enum class AdminTab { OPERATIONAL, ACQUISITIONS, RECRUITMENT, MENU_MANAGER, TABLE_CONFIG }
+private val MENU_CATEGORIES = listOf("Pizza", "Paste", "Carne", "Pește", "Salate", "Supe", "Desert", "Băuturi", "Altele")
 
 // ── Data models ───────────────────────────────────────────────────────────────
 
@@ -108,6 +111,21 @@ private data class HrApplication(
     val experience: String = "",
     val status: String = "pending",
     val timestamp: Long = 0L
+)
+
+private data class MenuItem(
+    val id: String = "",
+    val name: String = "",
+    val description: String = "",
+    val price: Double = 0.0,
+    val category: String = ""
+)
+
+private data class RestaurantTable(
+    val id: String = "",
+    val tableNumber: Int = 0,
+    val capacity: Int = 0,
+    val status: String = "LIBERA"
 )
 
 // ── Firestore real-time flows ─────────────────────────────────────────────────
@@ -148,6 +166,43 @@ private fun hrCvsFlow(db: Firestore): Flow<List<HrApplication>> = callbackFlow {
                         timestamp  = doc.getLong("timestamp") ?: 0L
                     )
                 }
+            )
+        }
+    awaitClose { reg.remove() }
+}
+
+private fun menuItemsFlow(db: Firestore): Flow<List<MenuItem>> = callbackFlow {
+    val reg = db.collection("menu")
+        .addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) return@addSnapshotListener
+            trySend(
+                snapshot.documents.mapNotNull { doc ->
+                    MenuItem(
+                        id          = doc.id,
+                        name        = doc.getString("name") ?: return@mapNotNull null,
+                        description = doc.getString("description") ?: "",
+                        price       = doc.getDouble("price") ?: 0.0,
+                        category    = doc.getString("category") ?: ""
+                    )
+                }.sortedWith(compareBy({ it.category }, { it.name }))
+            )
+        }
+    awaitClose { reg.remove() }
+}
+
+private fun tablesConfigFlow(db: Firestore): Flow<List<RestaurantTable>> = callbackFlow {
+    val reg = db.collection("tables")
+        .addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) return@addSnapshotListener
+            trySend(
+                snapshot.documents.mapNotNull { doc ->
+                    RestaurantTable(
+                        id          = doc.id,
+                        tableNumber = doc.getLong("tableNumber")?.toInt() ?: return@mapNotNull null,
+                        capacity    = doc.getLong("capacity")?.toInt() ?: 0,
+                        status      = doc.getString("status") ?: "LIBERA"
+                    )
+                }.sortedBy { it.tableNumber }
             )
         }
     awaitClose { reg.remove() }
@@ -399,6 +454,8 @@ private fun RestaurantAdminPortal(db: Firestore?, onBack: () -> Unit) {
                     AdminTab.OPERATIONAL  -> OperationalSystemPlaceholder(db = db, onBack = onBack)
                     AdminTab.ACQUISITIONS -> AcquisitionsTab(db = db, snackbarHostState = snackbarHostState)
                     AdminTab.RECRUITMENT  -> RecruitmentTab(db = db, snackbarHostState = snackbarHostState)
+                    AdminTab.MENU_MANAGER -> MenuManagerScreen(db = db, snackbarHostState = snackbarHostState)
+                    AdminTab.TABLE_CONFIG -> TableManagerScreen(db = db, snackbarHostState = snackbarHostState)
                 }
             }
         }
@@ -486,6 +543,32 @@ private fun AdminSidebar(
                 label      = "Recrutare HR",
                 isSelected = selectedTab == AdminTab.RECRUITMENT,
                 onClick    = { onTabChange(AdminTab.RECRUITMENT) }
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            Text(
+                "RESTAURANT",
+                fontSize      = 10.sp,
+                fontWeight    = FontWeight.ExtraBold,
+                color         = ETextDim,
+                letterSpacing = 1.5.sp,
+                modifier      = Modifier.padding(horizontal = 10.dp)
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            SidebarNavItem(
+                icon       = Icons.Rounded.MenuBook,
+                label      = "Management Meniu",
+                isSelected = selectedTab == AdminTab.MENU_MANAGER,
+                onClick    = { onTabChange(AdminTab.MENU_MANAGER) }
+            )
+            SidebarNavItem(
+                icon       = Icons.Rounded.GridView,
+                label      = "Configurare Mese",
+                isSelected = selectedTab == AdminTab.TABLE_CONFIG,
+                onClick    = { onTabChange(AdminTab.TABLE_CONFIG) }
             )
         }
 
@@ -1289,6 +1372,570 @@ fun OperationalSystemPlaceholder(db: Firestore?, onBack: () -> Unit) {
         WaiterApp(db = db)
     }
 }
+
+// ── Menu manager tab ──────────────────────────────────────────────────────────
+
+@Composable
+private fun MenuManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostState) {
+    val scope = rememberCoroutineScope()
+    var items         by remember { mutableStateOf<List<MenuItem>?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(db) {
+        if (db == null) { items = emptyList(); return@LaunchedEffect }
+        menuItemsFlow(db).collect { items = it }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Section header
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 22.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "Management Meniu",
+                    fontSize      = 24.sp,
+                    fontWeight    = FontWeight.ExtraBold,
+                    color         = ETextPrimary,
+                    letterSpacing = (-0.4).sp
+                )
+                Text("Administrați preparatele restaurantului", fontSize = 14.sp, color = ETextMuted)
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                items?.let { list ->
+                    EnterpriseCountBadge(count = list.size, label = "preparate", color = EOrange)
+                }
+                Button(
+                    onClick  = { showAddDialog = true },
+                    enabled  = db != null,
+                    shape    = RoundedCornerShape(12.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = EOrange)
+                ) {
+                    Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Adaugă Preparat", fontWeight = FontWeight.SemiBold, color = Color.White)
+                }
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+
+        if (db == null) { FirebaseOfflineWarning(modifier = Modifier.fillMaxSize()); return@Column }
+
+        when {
+            items == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = EBrand, strokeWidth = 2.5.dp)
+            }
+            items!!.isEmpty() -> EnterpriseEmptyState(
+                icon     = Icons.Rounded.MenuBook,
+                title    = "Meniu gol",
+                subtitle = "Adăugați primul preparat pentru a configura meniul restaurantului.",
+                modifier = Modifier.fillMaxSize()
+            )
+            else -> LazyVerticalGrid(
+                columns               = GridCells.Adaptive(minSize = 270.dp),
+                modifier              = Modifier.fillMaxSize(),
+                contentPadding        = PaddingValues(24.dp),
+                verticalArrangement   = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                gridItems(items!!, key = { it.id }) { item ->
+                    MenuItemCard(
+                        item     = item,
+                        onDelete = {
+                            scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        db.collection("menu").document(item.id).delete().get()
+                                    }
+                                    snackbarHostState.showSnackbar("\"${item.name}\" a fost eliminat din meniu.")
+                                } catch (e: Exception) {
+                                    snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAddDialog) {
+        AddMenuItemDialog(
+            onDismiss = { showAddDialog = false },
+            onConfirm = { name, description, price, category ->
+                showAddDialog = false
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            db!!.collection("menu").add(
+                                mapOf(
+                                    "name"        to name,
+                                    "description" to description,
+                                    "price"       to price,
+                                    "category"    to category
+                                )
+                            ).get()
+                        }
+                        snackbarHostState.showSnackbar("\"$name\" a fost adăugat în meniu ✓")
+                    } catch (e: Exception) {
+                        snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun MenuItemCard(item: MenuItem, onDelete: () -> Unit) {
+    ElevatedCard(
+        shape     = RoundedCornerShape(18.dp),
+        colors    = CardDefaults.elevatedCardColors(containerColor = ESurface),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp),
+        modifier  = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        item.name,
+                        fontSize   = 16.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color      = ETextPrimary,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    StatusBadge(item.category.ifBlank { "Altele" }, EOrange)
+                }
+                IconButton(
+                    onClick  = onDelete,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.Delete,
+                        null,
+                        tint     = Color(0xFFFF3B30).copy(alpha = 0.70f),
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+
+            if (item.description.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    item.description,
+                    fontSize   = 13.sp,
+                    color      = ETextMuted,
+                    maxLines   = 2,
+                    overflow   = TextOverflow.Ellipsis,
+                    lineHeight = 19.sp
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "%.2f RON".format(item.price),
+                fontSize   = 20.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color      = EOrange,
+                letterSpacing = (-0.3).sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddMenuItemDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, description: String, price: Double, category: String) -> Unit
+) {
+    var name             by remember { mutableStateOf("") }
+    var description      by remember { mutableStateOf("") }
+    var priceText        by remember { mutableStateOf("") }
+    var category         by remember { mutableStateOf(MENU_CATEGORIES[0]) }
+    var categoryExpanded by remember { mutableStateOf(false) }
+
+    val price      = priceText.replace(",", ".").toDoubleOrNull()
+    val canConfirm = name.isNotBlank() && price != null && price > 0.0
+
+    AlertDialog(
+        onDismissRequest  = onDismiss,
+        containerColor    = ESurface,
+        titleContentColor = ETextPrimary,
+        textContentColor  = ETextPrimary,
+        title = {
+            Text("Adaugă Preparat în Meniu", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                EnterpriseTextField(name, { name = it }, "Denumire preparat *")
+                EnterpriseTextField(
+                    value         = description,
+                    onValueChange = { description = it },
+                    label         = "Descriere (opțional)",
+                    singleLine    = false,
+                    minLines      = 2
+                )
+                OutlinedTextField(
+                    value         = priceText,
+                    onValueChange = { priceText = it },
+                    label         = { Text("Preț (RON) *") },
+                    modifier      = Modifier.fillMaxWidth(),
+                    singleLine    = true,
+                    shape         = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    isError       = priceText.isNotBlank() && price == null,
+                    colors        = dialogFieldColors()
+                )
+                // Category picker
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Categorie *", fontSize = 12.sp, color = ETextMuted)
+                    Box {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, EGlassBorder, RoundedCornerShape(12.dp))
+                                .background(EGlass, RoundedCornerShape(12.dp))
+                                .clickable { categoryExpanded = true }
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment     = Alignment.CenterVertically
+                        ) {
+                            Text(category, fontSize = 14.sp, color = ETextPrimary)
+                            Icon(Icons.Rounded.KeyboardArrowDown, null, tint = ETextMuted, modifier = Modifier.size(18.dp))
+                        }
+                        DropdownMenu(
+                            expanded         = categoryExpanded,
+                            onDismissRequest = { categoryExpanded = false },
+                            modifier         = Modifier.background(Color(0xFF181928))
+                        ) {
+                            MENU_CATEGORIES.forEach { cat ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(cat, color = if (cat == category) EBrand else ETextPrimary, fontSize = 14.sp)
+                                    },
+                                    onClick = { category = cat; categoryExpanded = false },
+                                    leadingIcon = if (cat == category) {
+                                        { Icon(Icons.Rounded.Check, null, tint = EBrand, modifier = Modifier.size(16.dp)) }
+                                    } else null
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick  = { onConfirm(name.trim(), description.trim(), price!!, category) },
+                enabled  = canConfirm,
+                shape    = RoundedCornerShape(10.dp),
+                colors   = ButtonDefaults.buttonColors(containerColor = EOrange)
+            ) {
+                Text("Adaugă", fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Anulează", color = ETextMuted)
+            }
+        }
+    )
+}
+
+// ── Table configuration tab ───────────────────────────────────────────────────
+
+@Composable
+private fun TableManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostState) {
+    val scope = rememberCoroutineScope()
+    var tables        by remember { mutableStateOf<List<RestaurantTable>?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(db) {
+        if (db == null) { tables = emptyList(); return@LaunchedEffect }
+        tablesConfigFlow(db).collect { tables = it }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Section header
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 22.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "Configurare Mese",
+                    fontSize      = 24.sp,
+                    fontWeight    = FontWeight.ExtraBold,
+                    color         = ETextPrimary,
+                    letterSpacing = (-0.4).sp
+                )
+                Text("Gestionați capacitatea și structura sălii", fontSize = 14.sp, color = ETextMuted)
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                tables?.let { list ->
+                    EnterpriseCountBadge(count = list.size, label = "mese", color = EBrand)
+                }
+                Button(
+                    onClick  = { showAddDialog = true },
+                    enabled  = db != null,
+                    shape    = RoundedCornerShape(12.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = EBrand)
+                ) {
+                    Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Adaugă Masă", fontWeight = FontWeight.SemiBold, color = Color.White)
+                }
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+
+        if (db == null) { FirebaseOfflineWarning(modifier = Modifier.fillMaxSize()); return@Column }
+
+        when {
+            tables == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = EBrand, strokeWidth = 2.5.dp)
+            }
+            tables!!.isEmpty() -> EnterpriseEmptyState(
+                icon     = Icons.Rounded.GridView,
+                title    = "Nicio masă configurată",
+                subtitle = "Adăugați mesele pentru a activa sistemul de rezervări și KDS.",
+                modifier = Modifier.fillMaxSize()
+            )
+            else -> LazyVerticalGrid(
+                columns               = GridCells.Adaptive(minSize = 200.dp),
+                modifier              = Modifier.fillMaxSize(),
+                contentPadding        = PaddingValues(24.dp),
+                verticalArrangement   = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                gridItems(tables!!, key = { it.id }) { table ->
+                    TableConfigCard(
+                        table    = table,
+                        onDelete = {
+                            scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        db.collection("tables").document(table.id).delete().get()
+                                    }
+                                    snackbarHostState.showSnackbar("Masa ${table.tableNumber} a fost eliminată.")
+                                } catch (e: Exception) {
+                                    snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAddDialog) {
+        AddTableDialog(
+            onDismiss = { showAddDialog = false },
+            onConfirm = { tableNumber, capacity ->
+                showAddDialog = false
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            db!!.collection("tables").add(
+                                mapOf(
+                                    "tableNumber" to tableNumber,
+                                    "capacity"    to capacity,
+                                    "status"      to "LIBERA"
+                                )
+                            ).get()
+                        }
+                        snackbarHostState.showSnackbar("Masa $tableNumber (${capacity} locuri) adăugată ✓")
+                    } catch (e: Exception) {
+                        snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun TableConfigCard(table: RestaurantTable, onDelete: () -> Unit) {
+    val (statusColor, statusLabel) = when (table.status) {
+        "OCUPATA"   -> EOrange to "Ocupată"
+        "REZERVATA" -> EAmber  to "Rezervată"
+        else        -> EGreen  to "Liberă"
+    }
+
+    ElevatedCard(
+        shape     = RoundedCornerShape(18.dp),
+        colors    = CardDefaults.elevatedCardColors(containerColor = ESurface),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp),
+        modifier  = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            // Coloured header band
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(86.dp)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(statusColor.copy(alpha = 0.22f), statusColor.copy(alpha = 0.06f))
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Rounded.TableRestaurant,
+                        null,
+                        tint     = statusColor,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Masa ${table.tableNumber}",
+                        fontSize   = 17.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color      = ETextPrimary
+                    )
+                }
+            }
+
+            // Details
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(Icons.Rounded.Group, null, tint = ETextMuted, modifier = Modifier.size(14.dp))
+                        Text("${table.capacity} locuri", fontSize = 13.sp, color = ETextMuted)
+                    }
+                    StatusBadge(statusLabel, statusColor)
+                }
+
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        onClick = onDelete,
+                        colors  = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF3B30))
+                    ) {
+                        Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Șterge", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddTableDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (tableNumber: Int, capacity: Int) -> Unit
+) {
+    var tableNumberText by remember { mutableStateOf("") }
+    var capacityText    by remember { mutableStateOf("") }
+
+    val tableNumber = tableNumberText.trim().toIntOrNull()
+    val capacity    = capacityText.trim().toIntOrNull()
+    val canConfirm  = tableNumber != null && tableNumber > 0 && capacity != null && capacity > 0
+
+    AlertDialog(
+        onDismissRequest  = onDismiss,
+        containerColor    = ESurface,
+        titleContentColor = ETextPrimary,
+        textContentColor  = ETextPrimary,
+        title = {
+            Text("Adaugă Masă Nouă", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                OutlinedTextField(
+                    value         = tableNumberText,
+                    onValueChange = { tableNumberText = it },
+                    label         = { Text("Număr Masă *") },
+                    modifier      = Modifier.fillMaxWidth(),
+                    singleLine    = true,
+                    shape         = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError       = tableNumberText.isNotBlank() && tableNumber == null,
+                    colors        = dialogFieldColors()
+                )
+                OutlinedTextField(
+                    value         = capacityText,
+                    onValueChange = { capacityText = it },
+                    label         = { Text("Capacitate (nr. locuri) *") },
+                    modifier      = Modifier.fillMaxWidth(),
+                    singleLine    = true,
+                    shape         = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError       = capacityText.isNotBlank() && capacity == null,
+                    colors        = dialogFieldColors()
+                )
+                Text(
+                    "Masa va fi adăugată cu statusul LIBERĂ.",
+                    fontSize = 12.sp,
+                    color    = ETextMuted
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick  = { onConfirm(tableNumber!!, capacity!!) },
+                enabled  = canConfirm,
+                shape    = RoundedCornerShape(10.dp),
+                colors   = ButtonDefaults.buttonColors(containerColor = EBrand)
+            ) {
+                Text("Adaugă", fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Anulează", color = ETextMuted)
+            }
+        }
+    )
+}
+
+// Shared dialog text-field colours so both dialogs stay visually consistent.
+@Composable
+private fun dialogFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor      = EBrand,
+    unfocusedBorderColor    = EGlassBorder,
+    errorBorderColor        = Color(0xFFFF3B30),
+    focusedLabelColor       = EBrand,
+    unfocusedLabelColor     = ETextMuted,
+    focusedTextColor        = ETextPrimary,
+    unfocusedTextColor      = ETextPrimary,
+    cursorColor             = EBrand,
+    focusedContainerColor   = EGlass,
+    unfocusedContainerColor = EGlass
+)
 
 // ── Shared: Portal scaffold (centering + back button) ─────────────────────────
 
