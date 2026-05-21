@@ -37,7 +37,9 @@
       "Bash(where adb *)",
       "PowerShell(Get-ChildItem *)",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb devices)",
-      "Bash(./gradlew :androidApp:assembleDebug)"
+      "Bash(./gradlew :androidApp:assembleDebug)",
+      "PowerShell($env:JAVA_HOME)",
+      "Bash(Select-String *)"
     ]
   }
 }

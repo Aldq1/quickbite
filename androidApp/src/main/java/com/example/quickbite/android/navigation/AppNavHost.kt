@@ -17,6 +17,7 @@ import com.example.quickbite.android.screens.ProfessionalDashboardScreen
 import com.example.quickbite.android.screens.ProducerDashboardScreen
 import com.example.quickbite.android.screens.RegisterScreen
 import com.example.quickbite.android.screens.RestaurantDashboardScreen
+import com.example.quickbite.android.screens.RestaurantFeedScreen
 import com.example.quickbite.android.screens.RestaurantMapScreen
 import com.example.quickbite.android.screens.RoleSelectionScreen
 import com.google.firebase.auth.FirebaseAuth
@@ -163,6 +164,15 @@ fun AppNavHost() {
 
         composable("restaurant_map") {
             RestaurantMapScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable("restaurant_feed") {
+            RestaurantFeedScreen(
+                onRestaurantClick = { restaurantId, tableNumber ->
+                    navController.navigate("client_ordering/$restaurantId/$tableNumber")
+                },
+                onSignOut = signOut
+            )
         }
     }
 }

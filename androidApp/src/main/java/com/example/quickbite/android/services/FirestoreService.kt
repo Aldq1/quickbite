@@ -41,7 +41,7 @@ object FirestoreService {
     // ── Order listener ────────────────────────────────────────────────────────
 
     fun listenToOrder(orderId: String, onStatusChange: (String) -> Unit): ListenerRegistration =
-        db.collection("active_orders").document(orderId)
+        db.collection("orders").document(orderId)
             .addSnapshotListener { snapshot, _ ->
                 val status = snapshot?.getString("status") ?: return@addSnapshotListener
                 onStatusChange(status)

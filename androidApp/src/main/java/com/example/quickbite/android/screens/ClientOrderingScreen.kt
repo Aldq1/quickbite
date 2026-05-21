@@ -162,16 +162,17 @@ fun ClientOrderingScreen(
     val scope      = rememberCoroutineScope()
     val currentUid = remember { FirebaseAuth.getInstance().currentUser?.uid }
 
-    var menuEntries      by remember { mutableStateOf<List<MenuEntry>>(emptyList()) }
-    var isLoading        by remember { mutableStateOf(true) }
-    var isPlacing        by remember { mutableStateOf(false) }
-    val cartItems        = remember { mutableStateListOf<CartItem>() }
-    var placedItemCount  by remember { mutableStateOf(0) }
-    var placedOrderId    by remember { mutableStateOf<String?>(null) }
-    var orderReady       by remember { mutableStateOf(false) }
-    var tableOccupied    by remember { mutableStateOf(false) }
-    var tableStatusKnown by remember { mutableStateOf(false) }
-    var selectedCategory by remember { mutableStateOf("Toate") }
+    var menuEntries           by remember { mutableStateOf<List<MenuEntry>>(emptyList()) }
+    var isLoading             by remember { mutableStateOf(true) }
+    var isPlacing             by remember { mutableStateOf(false) }
+    val cartItems             = remember { mutableStateListOf<CartItem>() }
+    var placedItemCount       by remember { mutableStateOf(0) }
+    var placedOrderId         by remember { mutableStateOf<String?>(null) }
+    var showNotificationDialog by remember { mutableStateOf(false) }
+    var tableOccupied         by remember { mutableStateOf(false) }
+    var tableStatusKnown      by remember { mutableStateOf(false) }
+    var selectedCategory      by remember { mutableStateOf("Toate") }
+    var showOrderSentDialog   by remember { mutableStateOf(false) }
 
     // Completely block system back — prevents accidental sign-out on an empty back stack
     BackHandler(enabled = true) { }
@@ -205,7 +206,7 @@ fun ClientOrderingScreen(
     DisposableEffect(placedOrderId) {
         val id = placedOrderId ?: return@DisposableEffect onDispose {}
         val reg = FirestoreService.listenToOrder(id) { status ->
-            if (status == "COMPLETED") orderReady = true
+            if (status == OrderStatus.DELIVERED) showNotificationDialog = true
         }
         onDispose { reg.remove() }
     }
@@ -295,11 +296,11 @@ fun ClientOrderingScreen(
                         capturedRid, capturedTable, TableStatus.OCCUPIED, occupantUid = uid
                     )
                     withContext(Dispatchers.Main) {
-                        placedItemCount = capturedCount
+                        placedItemCount     = capturedCount
                         cartItems.clear()
-                        placedOrderId   = orderId
-                        isPlacing       = false
-                        Toast.makeText(context, "Comanda a fost plasată!", Toast.LENGTH_SHORT).show()
+                        placedOrderId       = orderId
+                        isPlacing           = false
+                        showOrderSentDialog = true
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -315,8 +316,93 @@ fun ClientOrderingScreen(
         }
     }
 
+    // ── Order sent confirmation dialog ────────────────────────────────────────
+    if (showOrderSentDialog) {
+        AlertDialog(
+            onDismissRequest = { showOrderSentDialog = false },
+            shape            = RoundedCornerShape(28.dp),
+            containerColor   = OWhite,
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(84.dp)
+                        .background(OBrand.copy(alpha = 0.10f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(60.dp)
+                            .background(OBrand.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint     = OBrand,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
+                }
+            },
+            title = {
+                Text(
+                    "Comanda a fost trimisă! 🛎️",
+                    fontSize     = 19.sp,
+                    fontWeight   = FontWeight.ExtraBold,
+                    color        = OTextDark,
+                    textAlign    = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        "Chelnerul se îndreaptă spre masa ta și va aduce mâncarea în cel mai scurt timp.",
+                        fontSize   = 14.sp,
+                        color      = OTextMuted,
+                        textAlign  = TextAlign.Center,
+                        lineHeight = 21.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(OBrand.copy(alpha = 0.08f))
+                            .padding(horizontal = 16.dp, vertical = 11.dp)
+                    ) {
+                        Text(
+                            "🍽️  Poftă bună la masa $tableNumber!",
+                            fontSize   = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = OBrand,
+                            textAlign  = TextAlign.Center,
+                            modifier   = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick  = { showOrderSentDialog = false },
+                    shape    = RoundedCornerShape(14.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = OBrand),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Super, aștept! 🙌",
+                        color      = OWhite,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize   = 15.sp
+                    )
+                }
+            }
+        )
+    }
+
     // ── Order ready dialog ────────────────────────────────────────────────────
-    if (orderReady) {
+    if (showNotificationDialog) {
         AlertDialog(
             onDismissRequest = {},
             shape = RoundedCornerShape(24.dp),
@@ -337,12 +423,14 @@ fun ClientOrderingScreen(
                     fontWeight = FontWeight.Bold, color = OTextDark, textAlign = TextAlign.Center)
             },
             text = {
-                Text("Chelnerul se îndreaptă spre masa $tableNumber. Poftă bună!",
-                    fontSize = 14.sp, color = OTextMuted, textAlign = TextAlign.Center)
+                Text(
+                    "Comanda a fost preparată, chelnerul va veni spre dumneavoastră!",
+                    fontSize = 14.sp, color = OTextMuted, textAlign = TextAlign.Center
+                )
             },
             confirmButton = {
                 Button(
-                    onClick = { orderReady = false; onOrderPlaced() },
+                    onClick = { showNotificationDialog = false; onOrderPlaced() },
                     shape  = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = OBrand),
                     modifier = Modifier.fillMaxWidth()
@@ -596,7 +684,7 @@ private fun FloatingCartButton(
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Plasează Comanda",
+                        "Gata, cheamă chelnerul",
                         fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = OWhite
                     )
                     Text(

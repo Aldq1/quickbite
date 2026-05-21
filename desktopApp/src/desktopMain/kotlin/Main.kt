@@ -39,15 +39,13 @@ fun main() {
     application {
         Window(
             onCloseRequest = ::exitApplication,
-            title = "QuickBite — Waiter Command Center",
+            title = "QuickBite Enterprise Suite",
             state = WindowState(
                 placement = WindowPlacement.Floating,
                 size = DpSize(1360.dp, 860.dp)
             )
         ) {
-            MaterialTheme(colorScheme = KitchenTheme) {
-                WaiterApp(db = db)
-            }
+            EnterpriseSuiteApp(db = db)
         }
     }
 }

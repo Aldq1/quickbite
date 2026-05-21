@@ -121,13 +121,14 @@ internal fun KitchenDisplayContent(
 
             // ── COOKING column ────────────────────────────────────────────────
             KdsColumn(
-                modifier       = Modifier.weight(1f).fillMaxHeight(),
-                title          = "ÎN PREPARARE",
-                count          = cookingOrders.size,
-                accentColor    = KdsAmber,
-                orders         = cookingOrders,
-                primaryLabel   = "Gata! — Cheamă Chelnerul",
-                onPrimary      = onReady
+                modifier        = Modifier.weight(1f).fillMaxHeight(),
+                title           = "ÎN PREPARARE",
+                count           = cookingOrders.size,
+                accentColor     = KdsAmber,
+                orders          = cookingOrders,
+                primaryLabel    = "Gata! — Cheamă Chelnerul",
+                confirmOnClick  = true,
+                onPrimary       = onReady
             )
         }
     }
@@ -182,6 +183,7 @@ private fun KdsColumn(
     accentColor: Color,
     orders: List<Order>,
     primaryLabel: String,
+    confirmOnClick: Boolean = false,
     onPrimary: (Order) -> Unit
 ) {
     Column(modifier = modifier) {
@@ -226,10 +228,11 @@ private fun KdsColumn(
             ) {
                 items(orders, key = { it.id }) { order ->
                     KdsTicketCard(
-                        order        = order,
-                        accentColor  = accentColor,
-                        primaryLabel = primaryLabel,
-                        onPrimary    = { onPrimary(order) }
+                        order          = order,
+                        accentColor    = accentColor,
+                        primaryLabel   = primaryLabel,
+                        confirmOnClick = confirmOnClick,
+                        onPrimary      = { onPrimary(order) }
                     )
                 }
             }
@@ -282,9 +285,96 @@ private fun KdsTicketCard(
     order: Order,
     accentColor: Color,
     primaryLabel: String,
+    confirmOnClick: Boolean = false,
     onPrimary: () -> Unit
 ) {
+    var showConfirmDialog by remember { mutableStateOf(false) }
     var tick by remember { mutableStateOf(0) }
+
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = {},
+            shape            = RoundedCornerShape(20.dp),
+            containerColor   = KdsSurface,
+            tonalElevation   = 8.dp,
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .background(KdsGreen.copy(alpha = 0.14f), RoundedCornerShape(40.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(KdsGreen.copy(alpha = 0.20f), RoundedCornerShape(28.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint     = KdsGreen,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                }
+            },
+            title = {
+                Text(
+                    "Notificare Trimisă ✅",
+                    fontSize      = 18.sp,
+                    fontWeight    = FontWeight.ExtraBold,
+                    color         = KdsWhite,
+                    textAlign     = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        "Comanda a fost preparată, chelnerul va veni spre dumneavoastră.",
+                        fontSize   = 14.sp,
+                        color      = KdsMuted,
+                        textAlign  = TextAlign.Center,
+                        lineHeight = 22.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KdsGreen.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                            .border(1.dp, KdsGreen.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            "Masa ${order.tableNumber}  ·  ${order.items.size} ${if (order.items.size == 1) "produs" else "produse"}",
+                            fontSize   = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = KdsGreen,
+                            textAlign  = TextAlign.Center,
+                            modifier   = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick  = { showConfirmDialog = false; onPrimary() },
+                    shape    = RoundedCornerShape(12.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = KdsGreen),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Am înțeles",
+                        color      = KdsWhite,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize   = 15.sp
+                    )
+                }
+            }
+        )
+    }
     LaunchedEffect(order.timestamp) {
         while (true) { delay(30_000L); tick++ }
     }
@@ -392,7 +482,7 @@ private fun KdsTicketCard(
 
             // ── Action button ─────────────────────────────────────────────────
             Button(
-                onClick  = onPrimary,
+                onClick  = { if (confirmOnClick) showConfirmDialog = true else onPrimary() },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape    = RoundedCornerShape(12.dp),
                 colors   = ButtonDefaults.buttonColors(containerColor = accentColor)
