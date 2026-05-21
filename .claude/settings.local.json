@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\\\\desktopApp\\\\src\\\\desktopMain\\\\kotlin\" -Recurse -Filter \"*.kt\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\\\\androidApp\\\\src\\\\main\\\\java\\\\com\\\\example\\\\quickbite\\\\android\" -Recurse -File -Name)",
+      "Bash(Select-Object -First 50)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\\\\androidApp\\\\src\\\\main\\\\java\\\\com\\\\example\\\\quickbite\\\\android\" -Recurse | ForEach-Object { $_.FullName })",
+      "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\\\\androidApp\\\\src\\\\main\\\\java\\\\com\\\\example\\\\quickbite\\\\android\\\\screens\" -type f -name \"*.kt\")",
+      "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\" -type f -name \"*.kt\")",
+      "Bash(xargs grep -l \"quickbite://\")",
+      "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\" -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" -o -name \"*.js\" -o -name \"*.jsx\" \\\\\\))",
+      "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\" -type d -name \"web\" -o -type d -name \"shared\" -o -type d -name \"common\")",
+      "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\" -type f -name \"*.ts\" -o -type f -name \"*.tsx\" -o -type f -name \"*.js\")",
+      "PowerShell(Head *)",
+      "Bash(Find C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\\\\shared\\\\src *)",
+      "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\" -type d -name \"models\")",
+      "Bash(git *)"
+    ]
+  }
+}
