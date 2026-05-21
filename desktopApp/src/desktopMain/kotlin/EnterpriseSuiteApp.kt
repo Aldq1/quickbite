@@ -113,14 +113,6 @@ private data class HrApplication(
     val timestamp: Long = 0L
 )
 
-private data class MenuItem(
-    val id: String = "",
-    val name: String = "",
-    val description: String = "",
-    val price: Double = 0.0,
-    val category: String = ""
-)
-
 private data class RestaurantTable(
     val id: String = "",
     val tableNumber: Int = 0,
