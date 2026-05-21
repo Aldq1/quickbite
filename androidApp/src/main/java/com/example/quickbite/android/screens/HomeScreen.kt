@@ -30,8 +30,8 @@ fun HomeScreen(navController: NavController) {
             .addOnSuccessListener { doc ->
                 val route = when (doc.getString("role")) {
                     "RESTAURANT"   -> "restaurant_dashboard"
-                    // CLIENT picks a table from the floor plan so tableNumber is dynamic
-                    "CLIENT"       -> "live_floor_plan/$DEMO_ID"
+                    // CLIENT must scan the QR at their table — no manual table selection allowed
+                    "CLIENT"       -> "client_dashboard"
                     "PRODUCER"     -> "producer_dashboard"
                     "PROFESSIONAL" -> "professional_dashboard"
                     else           -> "role_selection"
@@ -41,8 +41,7 @@ fun HomeScreen(navController: NavController) {
                 }
             }
             .addOnFailureListener {
-                // If role lookup fails, send to floor plan so table number is still dynamic
-                navController.navigate("live_floor_plan/$DEMO_ID") {
+                navController.navigate("client_dashboard") {
                     popUpTo("home") { inclusive = true }
                 }
             }

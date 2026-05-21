@@ -16,7 +16,28 @@
       "PowerShell(Head *)",
       "Bash(Find C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\\\\shared\\\\src *)",
       "Bash(Find \"C:\\\\Users\\\\User\\\\AndroidStudioProjects\\\\quickbite\" -type d -name \"models\")",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(./gradlew :androidApp:compileDebugKotlin --offline)",
+      "Bash(tasklist)",
+      "Bash(findstr -i \"java\\\\|quickbite\\\\|compose\")",
+      "Bash(./gradlew :desktopApp:run --offline)",
+      "Bash(java -version)",
+      "Bash(./gradlew --version)",
+      "Bash(./gradlew :desktopApp:run --no-configuration-cache)",
+      "Bash(./gradlew :androidApp:installDebug --no-configuration-cache)",
+      "Bash(adb logcat *)",
+      "Bash(\"/c/Users/Mihnea/AppData/Local/Android/Sdk/platform-tools/adb.exe\" logcat *)",
+      "Bash(node -e \"require\\('firebase-admin'\\)\")",
+      "Bash(npm install *)",
+      "Bash(./gradlew androidApp:installDebug)",
+      "Bash(./gradlew desktopApp:compileKotlinDesktop)",
+      "Bash(./gradlew androidApp:compileDebugKotlin)",
+      "Bash(./gradlew :androidApp:compileDebugKotlin)",
+      "Bash(adb devices *)",
+      "Bash(where adb *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb devices)",
+      "Bash(./gradlew :androidApp:assembleDebug)"
     ]
   }
 }

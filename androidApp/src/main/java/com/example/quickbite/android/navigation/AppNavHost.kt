@@ -126,13 +126,15 @@ fun AppNavHost() {
             ClientOrderingScreen(
                 restaurantId  = restaurantId,
                 tableNumber   = tableNumber,
-                // When reached from HomeScreen the back stack is empty — sign out instead of
-                // doing a no-op popBackStack() that would leave the user stuck.
                 onOrderPlaced = {
-                    if (!navController.popBackStack()) signOut()
+                    if (!navController.popBackStack()) {
+                        navController.navigate("home") { popUpTo(0) { inclusive = true } }
+                    }
                 },
-                onBack        = {
-                    if (!navController.popBackStack()) signOut()
+                onBack = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate("home") { popUpTo(0) { inclusive = true } }
+                    }
                 }
             )
         }

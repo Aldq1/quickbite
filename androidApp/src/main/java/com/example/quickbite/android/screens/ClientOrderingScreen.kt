@@ -73,14 +73,54 @@ private data class MenuEntry(
 )
 
 private val DEMO_MENU = listOf(
-    MenuEntry("Burger QuickBite Epic",       "Burgeri",   42.00, "Carne de vită 200g, cheddar aged, bacon crispy, sos special QB"),
-    MenuEntry("Pizza Quattro Formaggi",      "Pizza",     39.00, "Mozzarella, gorgonzola, parmezan, pecorino — blat crocant pe vatră"),
-    MenuEntry("Cartofi cu Parmezan & Trufe", "Garnituri", 18.00, "Cartofi belgieni, sos de parmezan, ulei de trufe, rozmarin"),
-    MenuEntry("Limonadă cu Mentă",           "Băuturi",   15.00, "Lămâie stoarsă, sirop de mentă, apă carbogazoasă — 500 ml"),
-    MenuEntry("Tiramisu de Casă",            "Deserturi", 22.00, "Rețetă originală italiană — mascarpone, espresso, cacao Valrhona"),
-    MenuEntry("Somon Gravlax cu Avocado",    "Pește",     56.00, "File de somon marinat, cremă de avocado, capere, lemon zest"),
-    MenuEntry("Sparanghel la Grătar",        "Intrări",   32.00, "Sparanghel verde, sos hollandaise, ou poché, chipsuri de șuncă"),
-    MenuEntry("Flat White",                  "Cafea",     14.00, "Dublu espresso, lapte de oat textură mătăsoasă"),
+    // Supe
+    MenuEntry("Ciorbă de Burtă",               "Supe",      23.00, "Burtă de vită, smântână, usturoi, oțet, ardei iute — rețetă tradițională"),
+    MenuEntry("Supă Cremă de Dovleac",         "Supe",      19.00, "Dovleac copt, ghimbir, lapte de cocos, semințe de dovleac prăjite"),
+    MenuEntry("Ciorbă Rădăuțeană",             "Supe",      25.00, "Piept de pui, smântână grasă, usturoi, morcov, leuștean proaspăt"),
+    // Intrări
+    MenuEntry("Sparanghel la Grătar",          "Intrări",   32.00, "Sparanghel verde, sos hollandaise, ou poché, chipsuri de șuncă Praga"),
+    MenuEntry("Bruschette cu Roșii & Burrata", "Intrări",   26.00, "Pâine de casă prăjită, roșii cherry, burrata proaspătă, busuioc, ulei de măsline"),
+    MenuEntry("Cârnăciori de Casă la Grătar",  "Intrări",   34.00, "Cârnăciori din porc & vită, muștar de Dijon, murături asortate"),
+    // Salate
+    MenuEntry("Salată Caesar cu Pui",          "Salate",    34.00, "Pui la grătar, salată romană, crutoane, parmezan ras, sos Caesar clasic"),
+    MenuEntry("Salată Grecească",              "Salate",    26.00, "Roșii, castravete, ceapă roșie, măsline Kalamata, brânză feta, oregano"),
+    MenuEntry("Salată cu Somon & Quinoa",      "Salate",    42.00, "Somon afumat la rece, quinoa, rucola, avocado, dressing de lămâie"),
+    // Paste
+    MenuEntry("Pasta Carbonara",               "Paste",     38.00, "Spaghetti, guanciale crocant, gălbenuș de ou, pecorino Romano, piper negru"),
+    MenuEntry("Penne Arrabiata",               "Paste",     32.00, "Sos de roșii San Marzano, usturoi, ardei iute, busuioc proaspăt, parmezan"),
+    MenuEntry("Tagliatelle Gorgonzola & Nucă", "Paste",     42.00, "Gorgonzola dolce, smântână, nuci prăjite, rucola, reducție de vin alb"),
+    // Burgeri
+    MenuEntry("Burger QuickBite Epic",         "Burgeri",   42.00, "Carne de vită 200g, cheddar aged, bacon crispy, sos special QB, salată & roșii"),
+    MenuEntry("Burger Crispy Chicken",         "Burgeri",   38.00, "Piept de pui crocant, coleslaw, castraveciori murați, sos ranch, chifla brioche"),
+    MenuEntry("Burger Veggie Deluxe",          "Burgeri",   36.00, "Pateu de năut & sfeclă, hummus, roșii cherry, rucola, sos tahini"),
+    // Pizza
+    MenuEntry("Pizza Margherita",              "Pizza",     35.00, "Sos de roșii artizanal, mozzarella fior di latte, busuioc proaspăt"),
+    MenuEntry("Pizza Quattro Formaggi",        "Pizza",     49.00, "Mozzarella, gorgonzola, parmezan, pecorino — blat crocant pe vatră de piatră"),
+    MenuEntry("Pizza Diavola",                 "Pizza",     44.00, "Salam picant, ardei iute, mozzarella, sos de roșii, oregano"),
+    // Grătar
+    MenuEntry("Cotlet de Porc cu Ierburi",     "Grătar",    52.00, "Cotlet 280g marinat în rozmarin & cimbru, garnitură la alegere, muștar de casă"),
+    MenuEntry("Mușchi de Vită (250g)",         "Grătar",    89.00, "Vită Angus, gătit la preferință, sos de piper verde, cartofi rosti"),
+    MenuEntry("Pui la Grătar cu Lemon Herb",   "Grătar",    46.00, "Piept de pui 300g, marinadă de lămâie & ierburi, piure cremos, legume sezoniere"),
+    // Pește
+    MenuEntry("Somon Gravlax cu Avocado",      "Pește",     56.00, "File de somon marinat în sare & zahăr, cremă de avocado, capere, lemon zest"),
+    MenuEntry("File de Șalău la Tigaie",       "Pește",     48.00, "Șalău proaspăt, unt brun cu capere, piure de conopidă, spanac sauté"),
+    // Garnituri
+    MenuEntry("Cartofi cu Parmezan & Trufe",   "Garnituri", 24.00, "Cartofi belgieni prăjiți la dublu, sos de parmezan, ulei de trufe, rozmarin"),
+    MenuEntry("Piure Cremos de Cartofi",       "Garnituri", 14.00, "Cartofi Agria, unt 82%, lapte integral, nucșoară"),
+    MenuEntry("Orez cu Legume Sezoniere",      "Garnituri", 13.00, "Orez basmati, dovlecei, morcov, ardei gras, sos de soia"),
+    // Deserturi
+    MenuEntry("Tiramisu della Casa",           "Deserturi", 28.00, "Rețetă originală italiană — piscoturi, mascarpone, espresso, cacao Valrhona"),
+    MenuEntry("Pancakes cu Fructe de Pădure",  "Deserturi", 24.00, "Pancakes pufoase, compot de zmeură & afine, frișcă naturală, miere de salcâm"),
+    MenuEntry("Prăjitură de Ciocolată",        "Deserturi", 22.00, "Coulant de ciocolată 70%, înghețată de vanilie bourbon, caramel sărat"),
+    // Băuturi
+    MenuEntry("Limonadă cu Mentă & Ghimbir",   "Băuturi",   16.00, "Lămâie stoarsă, sirop de mentă, ghimbir proaspăt, apă carbogazoasă — 500 ml"),
+    MenuEntry("Suc de Portocale Proaspăt",     "Băuturi",   16.00, "Stors la comandă din portocale siciliene — 300 ml"),
+    MenuEntry("Apă Minerală Borsec",           "Băuturi",    8.00, "0.5L — plată sau carbogazoasă"),
+    MenuEntry("Cola / Fanta / Sprite",         "Băuturi",   10.00, "Doză 330 ml"),
+    // Cafea
+    MenuEntry("Espresso",                      "Cafea",     10.00, "Blend arabica 100%, extracție 25 ml, crema densă"),
+    MenuEntry("Cappuccino",                    "Cafea",     13.00, "Espresso dublu, lapte textură mătăsoasă, spumă de lapte fină"),
+    MenuEntry("Flat White",                    "Cafea",     14.00, "Dublu espresso, lapte de oat textură mătăsoasă, latte art inclus"),
 )
 
 private data class CartItem(val name: String, val category: String, val price: Double, val quantity: Int)
@@ -101,6 +141,10 @@ private fun categoryEmoji(category: String) = when (category.trim().lowercase())
     "pește"     -> "🐟"
     "intrări"   -> "🥗"
     "cafea"     -> "☕"
+    "supe"      -> "🍲"
+    "salate"    -> "🥙"
+    "paste"     -> "🍝"
+    "grătar"    -> "🥩"
     else        -> "🍽️"
 }
 

@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.LocalAtm
 import androidx.compose.material.icons.rounded.TableRestaurant
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -47,7 +48,8 @@ private data class ActiveOrder(
     val tableNumber: Int,
     val items: List<Map<String, Any>>,
     val timestamp: Long,
-    val occupantUid: String? = null
+    val occupantUid: String? = null,
+    val status: String = "PENDING"
 )
 
 private data class RecentOrder(
@@ -75,7 +77,8 @@ fun WaiterDashboardScreen(restaurantId: String) {
     var showCancelDialog by remember { mutableStateOf(false) }
     var recentOrders     by remember { mutableStateOf<List<RecentOrder>>(emptyList()) }
     var selectedTab      by remember { mutableStateOf(0) }
-    var issueOrder       by remember { mutableStateOf<RecentOrder?>(null) }
+    var issueOrder              by remember { mutableStateOf<RecentOrder?>(null) }
+    var showFinishBlockedDialog by remember { mutableStateOf(false) }
 
     // Real-time snapshot listener — cleaned up when the composable leaves composition
     DisposableEffect(restaurantId) {
@@ -86,12 +89,12 @@ fun WaiterDashboardScreen(restaurantId: String) {
                 isConnected = true
                 orders = snapshot?.documents?.mapNotNull { doc ->
                     val status = doc.getString("status") ?: return@mapNotNull null
-                    if (status != "PENDING") return@mapNotNull null
+                    if (status !in setOf("PENDING", "COOKING", "READY", "COMPLETED")) return@mapNotNull null
                     val tableNumber = (doc.getLong("tableNumber") ?: return@mapNotNull null).toInt()
                     @Suppress("UNCHECKED_CAST")
                     val items = doc.get("items") as? List<Map<String, Any>> ?: emptyList()
                     val ts = doc.getLong("timestamp") ?: 0L
-                    ActiveOrder(id = doc.id, tableNumber = tableNumber, items = items, timestamp = ts, occupantUid = doc.getString("occupantUid"))
+                    ActiveOrder(id = doc.id, tableNumber = tableNumber, items = items, timestamp = ts, occupantUid = doc.getString("occupantUid"), status = status)
                 } ?: emptyList()
                 // Auto-clear selection when the order disappears (e.g. delivered elsewhere)
                 val current = selectedOrder
@@ -205,6 +208,49 @@ fun WaiterDashboardScreen(restaurantId: String) {
                         .collection("active_orders")
                         .document(order.id)
                         .update(updates)
+                        .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
+                        .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
+    fun finishTable(tableNumber: Int) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val db = FirebaseFirestore.getInstance()
+                // Fresh Firestore read — authoritative safety check, not relying on in-memory state
+                val snapshot = suspendCancellableCoroutine { cont ->
+                    db.collection("active_orders")
+                        .whereEqualTo("restaurantId", restaurantId)
+                        .whereEqualTo("tableNumber", tableNumber.toLong())
+                        .get()
+                        .addOnSuccessListener { cont.resumeWith(Result.success(it)) }
+                        .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
+                }
+                val activeDocs = snapshot.documents.filter { doc ->
+                    val s = doc.getString("status") ?: return@filter false
+                    s !in setOf("ARCHIVED", "CANCELLED")
+                }
+                val isBlocked = activeDocs.any { doc ->
+                    val s = doc.getString("status") ?: ""
+                    s == "PENDING" || s == "COOKING"
+                }
+                if (isBlocked) {
+                    showFinishBlockedDialog = true
+                    return@launch
+                }
+                val batch = db.batch()
+                activeDocs.forEach { doc ->
+                    batch.update(doc.reference, "status", "ARCHIVED")
+                }
+                val tableRef = db.collection("users")
+                    .document(restaurantId)
+                    .collection("tables")
+                    .document(tableNumber.toString())
+                batch.update(tableRef, "status", "FREE", "tableNumber", tableNumber, "occupantUid", null)
+                suspendCancellableCoroutine { cont ->
+                    batch.commit()
                         .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                         .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
                 }
@@ -332,7 +378,8 @@ fun WaiterDashboardScreen(restaurantId: String) {
                                 modifier        = Modifier.weight(1f).fillMaxWidth(),
                                 order           = selectedOrder,
                                 onMarkDelivered = { markDelivered(it) },
-                                onCancelOrder   = { showCancelDialog = true }
+                                onCancelOrder   = { showCancelDialog = true },
+                                onFinishTable   = { finishTable(it.tableNumber) }
                             )
                             else -> RecentOrdersPanel(
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -441,6 +488,46 @@ fun WaiterDashboardScreen(restaurantId: String) {
             onConfirm = { note, reopen ->
                 resolveIssue(issueOrder!!, note, reopen)
                 issueOrder = null
+            }
+        )
+    }
+
+    if (showFinishBlockedDialog) {
+        AlertDialog(
+            onDismissRequest = { showFinishBlockedDialog = false },
+            shape            = RoundedCornerShape(20.dp),
+            containerColor   = WWhite,
+            icon = {
+                Icon(
+                    Icons.Rounded.Block,
+                    contentDescription = null,
+                    tint   = WError,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text       = "Acțiune blocată",
+                    fontSize   = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color      = WError
+                )
+            },
+            text = {
+                Text(
+                    text     = "Există comenzi nefinalizate la bucătărie! Toate comenzile mesei trebuie să fie FINALIZATE înainte de a încheia sesiunea.",
+                    fontSize = 14.sp,
+                    color    = WTextDark
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showFinishBlockedDialog = false },
+                    shape   = RoundedCornerShape(12.dp),
+                    colors  = ButtonDefaults.buttonColors(containerColor = WBrand)
+                ) {
+                    Text("Am înțeles", color = WWhite, fontWeight = FontWeight.Bold)
+                }
             }
         )
     }
@@ -692,7 +779,8 @@ private fun OrderDetailPanel(
     modifier: Modifier,
     order: ActiveOrder?,
     onMarkDelivered: (ActiveOrder) -> Unit,
-    onCancelOrder: (ActiveOrder) -> Unit
+    onCancelOrder: (ActiveOrder) -> Unit,
+    onFinishTable: (ActiveOrder) -> Unit
 ) {
     if (order == null) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
@@ -799,6 +887,29 @@ private fun OrderDetailPanel(
             Text(
                 text = "Marcat ca Livrat",
                 fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = WWhite
+            )
+        }
+
+        Button(
+            onClick = { onFinishTable(order) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00875A))
+        ) {
+            Icon(
+                Icons.Rounded.LocalAtm,
+                contentDescription = null,
+                tint = WWhite,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Plată Cash - Finalizează Masa",
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = WWhite
             )

@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.History
@@ -84,17 +85,19 @@ fun WaiterApp(db: Firestore?) {
 
 @Composable
 fun WaiterDashboardScreen(db: Firestore, restaurantId: String, onLogout: () -> Unit = {}) {
-    var orders        by remember { mutableStateOf<List<Order>>(emptyList()) }
+    var allOrders     by remember { mutableStateOf<List<Order>>(emptyList()) }
     var tableStatuses by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var selectedTable by remember { mutableStateOf<Int?>(null) }
     var isLive        by remember { mutableStateOf(false) }
     var activeTab     by remember { mutableStateOf(0) }
     val scope         = rememberCoroutineScope()
 
+    val orders = remember(allOrders) { allOrders.filter { it.status != "ARCHIVED" && it.status != "WALKED_OUT" } }
+
     LaunchedEffect(restaurantId) {
         launch {
             ordersFlow(db, restaurantId).collect { incoming ->
-                orders = incoming
+                allOrders = incoming
                 isLive = true
             }
         }
@@ -109,8 +112,9 @@ fun WaiterDashboardScreen(db: Firestore, restaurantId: String, onLogout: () -> U
     }
 
     val pendingCount  = orders.count { it.status == OrderStatus.PENDING }
-    val historyOrders = remember(orders) {
-        orders.filter { it.status == OrderStatus.COMPLETED }.sortedByDescending { it.timestamp }
+    val historyOrders = remember(allOrders) {
+        allOrders.filter { it.status == "ARCHIVED" || it.status == "WALKED_OUT" || it.status == OrderStatus.COMPLETED }
+            .sortedByDescending { it.timestamp }
     }
 
     // Merge orders-derived occupancy with the Firestore tables collection.
@@ -154,34 +158,69 @@ fun WaiterDashboardScreen(db: Firestore, restaurantId: String, onLogout: () -> U
                 onFreeTable = {
                     selectedTable?.let { tableNum ->
                         scope.launch {
-                            db.collection("users").document(restaurantId)
-                                .collection("tables").document(tableNum.toString())
-                                .set(mapOf("status" to TableStatus.FREE, "tableNumber" to tableNum))
+                            val batch = db.batch()
+                            // Mark walked-out so history can distinguish unpaid closes from paid ones
+                            orders.filter {
+                                it.tableNumber == tableNum && it.status != "CANCELLED"
+                            }.forEach { order ->
+                                batch.update(
+                                    db.collection("orders").document(order.id),
+                                    "status", "WALKED_OUT"
+                                )
+                            }
+                            batch.set(
+                                db.collection("users").document(restaurantId)
+                                    .collection("tables").document(tableNum.toString()),
+                                mapOf("status" to TableStatus.FREE, "tableNumber" to tableNum)
+                            )
+                            batch.commit()
                         }
                     }
                 },
                 onMarkAllPaid = {
                     selectedTable?.let { tableNum ->
-                        val active = orders.filter {
-                            it.tableNumber == tableNum && it.status != OrderStatus.COMPLETED
-                        }
                         scope.launch {
-                            active.forEach { order ->
-                                db.collection("orders").document(order.id)
-                                    .update("status", OrderStatus.COMPLETED)
+                            val batch     = db.batch()
+                            val toArchive = orders.filter { it.tableNumber == tableNum && it.status != "CANCELLED" }
+                            toArchive.forEach { order ->
+                                batch.update(
+                                    db.collection("orders").document(order.id),
+                                    "status", "ARCHIVED"
+                                )
                             }
-                            db.collection("users").document(restaurantId)
-                                .collection("tables").document(tableNum.toString())
-                                .set(mapOf("status" to TableStatus.FREE, "tableNumber" to tableNum))
+                            batch.set(
+                                db.collection("users").document(restaurantId)
+                                    .collection("tables").document(tableNum.toString()),
+                                mapOf("status" to TableStatus.FREE, "tableNumber" to tableNum)
+                            )
+                            batch.commit()
                         }
                     }
                 }
             )
         },
-        historyContent = { OrderHistoryPanel(modifier = Modifier.fillMaxSize(), historyOrders = historyOrders) },
+        historyContent = {
+            OrderHistoryPanel(
+                modifier      = Modifier.fillMaxSize(),
+                historyOrders = historyOrders,
+                onDeleteOrder = { order ->
+                    scope.launch { db.collection("orders").document(order.id).delete() }
+                },
+                onDeleteAll = {
+                    scope.launch {
+                        historyOrders.chunked(499).forEach { chunk ->
+                            val batch = db.batch()
+                            chunk.forEach { o -> batch.delete(db.collection("orders").document(o.id)) }
+                            batch.commit()
+                        }
+                    }
+                }
+            )
+        },
         kdsContent     = { KitchenDisplayScreen(modifier = Modifier.fillMaxSize(), db = db, restaurantId = restaurantId) },
-        qrContent      = { QrManagerScreen(modifier = Modifier.fillMaxSize(), restaurantId = restaurantId) }
+        qrContent      = { QrManagerScreen(modifier = Modifier.fillMaxSize(), restaurantId = restaurantId, db = db) }
     )
+
 }
 
 // ── Demo / mock dashboard (no Firebase needed) ────────────────────────────────
@@ -234,7 +273,14 @@ internal fun WaiterDashboardMockScreen() {
                 }
             )
         },
-        historyContent = { OrderHistoryPanel(modifier = Modifier.fillMaxSize(), historyOrders = historyOrders) },
+        historyContent = {
+            OrderHistoryPanel(
+                modifier      = Modifier.fillMaxSize(),
+                historyOrders = historyOrders,
+                onDeleteOrder = { order -> orders = orders.filter { it.id != order.id } },
+                onDeleteAll   = { orders = orders.filter { it.status != OrderStatus.COMPLETED } }
+            )
+        },
         kdsContent     = {
             KitchenDisplayContent(
                 modifier  = Modifier.fillMaxSize(),
@@ -612,16 +658,25 @@ private fun OrderDetailPanel(
             if (tableStatus == TableStatus.OCCUPIED) {
                 Spacer(Modifier.height(16.dp))
 
-                // Primary: Cash payment — marks all orders COMPLETED + frees table
+                val canFinish = orders.none {
+                    it.status == OrderStatus.PENDING || it.status == OrderStatus.COOKING
+                }
+
+                // Primary: Cash payment — marks all orders ARCHIVED + frees table
                 Button(
-                    onClick  = onMarkAllPaid,
+                    onClick  = { if (canFinish) onMarkAllPaid() },
+                    enabled  = canFinish,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape    = RoundedCornerShape(12.dp),
-                    colors   = ButtonDefaults.buttonColors(containerColor = Green)
+                    colors   = ButtonDefaults.buttonColors(
+                        containerColor         = Green,
+                        disabledContainerColor = Green.copy(alpha = 0.20f),
+                        disabledContentColor   = Green.copy(alpha = 0.45f)
+                    )
                 ) {
-                    Icon(Icons.Rounded.Payments, contentDescription = null, tint = White, modifier = Modifier.size(19.dp))
+                    Icon(Icons.Rounded.Payments, contentDescription = null, modifier = Modifier.size(19.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Plată Cash · Finalizează Masa", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = White)
+                    Text("Plată Cash · Finalizează Masa", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -1129,7 +1184,15 @@ private fun clearSavedRestaurantId() {
 // ── Order history panel ───────────────────────────────────────────────────────
 
 @Composable
-private fun OrderHistoryPanel(modifier: Modifier, historyOrders: List<Order>) {
+private fun OrderHistoryPanel(
+    modifier:      Modifier,
+    historyOrders: List<Order>,
+    onDeleteOrder: (Order) -> Unit,
+    onDeleteAll:   () -> Unit
+) {
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds   by remember { mutableStateOf(emptySet<String>()) }
+
     if (historyOrders.isEmpty()) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1141,18 +1204,97 @@ private fun OrderHistoryPanel(modifier: Modifier, historyOrders: List<Order>) {
         return
     }
 
-    val totalRevenue = historyOrders.sumOf { it.totalPrice }
+    val paidOrders     = historyOrders.filter { it.status == "ARCHIVED" || it.status == OrderStatus.COMPLETED }
+    val walkedOutCount = historyOrders.count { it.status == "WALKED_OUT" }
+    val totalRevenue   = paidOrders.sumOf { it.totalPrice }
+    val allSelected    = selectedIds.size == historyOrders.size
 
     Column(modifier = modifier.background(Bg)) {
         Surface(color = Surface, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier              = Modifier.padding(horizontal = 28.dp, vertical = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(48.dp),
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                HistoryStatCard(label = "Comenzi Finalizate", value = historyOrders.size.toString(),   accent = Green)
-                if (totalRevenue > 0.0) {
-                    HistoryStatCard(label = "Venit Total", value = "${"%.2f".format(totalRevenue)} RON", accent = Orange)
+            if (!selectionMode) {
+                // ── Normal header ─────────────────────────────────────────────
+                Row(
+                    modifier              = Modifier.padding(horizontal = 28.dp, vertical = 20.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                        HistoryStatCard(label = "Comenzi Plătite", value = paidOrders.size.toString(), accent = Green)
+                        if (totalRevenue > 0.0) {
+                            HistoryStatCard(label = "Venit Total", value = "${"%.2f".format(totalRevenue)} RON", accent = Orange)
+                        }
+                        if (walkedOutCount > 0) {
+                            HistoryStatCard(label = "Neplătite", value = walkedOutCount.toString(), accent = Red)
+                        }
+                    }
+                    Button(
+                        onClick = { selectionMode = true },
+                        shape   = RoundedCornerShape(10.dp),
+                        colors  = ButtonDefaults.buttonColors(containerColor = Red.copy(alpha = 0.15f), contentColor = Red)
+                    ) {
+                        Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Ștergere", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            } else {
+                // ── Selection toolbar ─────────────────────────────────────────
+                Row(
+                    modifier              = Modifier.padding(horizontal = 20.dp, vertical = 14.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text       = if (selectedIds.isEmpty()) "Selectează înregistrări"
+                                     else "${selectedIds.size} selectat${if (selectedIds.size != 1) "e" else "ă"}",
+                        fontSize   = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color      = if (selectedIds.isEmpty()) Muted else White
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        onClick = {
+                            selectedIds = if (allSelected) emptySet()
+                                          else historyOrders.map { it.id }.toSet()
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Orange)
+                    ) {
+                        Text(if (allSelected) "Deselectează tot" else "Selectează tot", fontSize = 13.sp)
+                    }
+                    Button(
+                        onClick = {
+                            val toDelete = historyOrders.filter { it.id in selectedIds }
+                            if (toDelete.size == historyOrders.size) {
+                                onDeleteAll()
+                            } else {
+                                toDelete.forEach { onDeleteOrder(it) }
+                            }
+                            selectedIds   = emptySet()
+                            selectionMode = false
+                        },
+                        enabled = selectedIds.isNotEmpty(),
+                        shape   = RoundedCornerShape(10.dp),
+                        colors  = ButtonDefaults.buttonColors(
+                            containerColor         = Red,
+                            disabledContainerColor = Muted.copy(alpha = 0.15f),
+                            disabledContentColor   = Muted
+                        )
+                    ) {
+                        Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text       = if (selectedIds.isEmpty()) "Șterge selecția"
+                                         else "Șterge (${selectedIds.size})",
+                            fontSize   = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    TextButton(
+                        onClick = { selectionMode = false; selectedIds = emptySet() },
+                        colors  = ButtonDefaults.textButtonColors(contentColor = Muted)
+                    ) {
+                        Text("Anulează", fontSize = 13.sp)
+                    }
                 }
             }
         }
@@ -1163,11 +1305,23 @@ private fun OrderHistoryPanel(modifier: Modifier, historyOrders: List<Order>) {
             contentPadding      = PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            item {
-                Text("JURNAL COMENZI", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Muted, letterSpacing = 1.sp)
-                Spacer(Modifier.height(4.dp))
+            if (!selectionMode) {
+                item {
+                    Text("JURNAL COMENZI", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Muted, letterSpacing = 1.sp)
+                    Spacer(Modifier.height(4.dp))
+                }
             }
-            items(historyOrders) { order -> HistoryOrderCard(order = order) }
+            items(historyOrders) { order ->
+                HistoryOrderCard(
+                    order          = order,
+                    selectionMode  = selectionMode,
+                    isSelected     = order.id in selectedIds,
+                    onToggleSelect = {
+                        selectedIds = if (order.id in selectedIds) selectedIds - order.id
+                                      else selectedIds + order.id
+                    }
+                )
+            }
             item { Spacer(Modifier.height(8.dp)) }
         }
     }
@@ -1182,27 +1336,63 @@ private fun HistoryStatCard(label: String, value: String, accent: Color) {
 }
 
 @Composable
-private fun HistoryOrderCard(order: Order) {
+private fun HistoryOrderCard(
+    order:          Order,
+    selectionMode:  Boolean = false,
+    isSelected:     Boolean = false,
+    onToggleSelect: () -> Unit = {}
+) {
+    val isWalkedOut = order.status == "WALKED_OUT"
+    val accent      = if (isWalkedOut) Red else Green
+
     Surface(
-        shape    = RoundedCornerShape(14.dp),
-        color    = Green.copy(alpha = 0.06f),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Green.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
+        shape  = RoundedCornerShape(14.dp),
+        color  = if (isSelected) accent.copy(alpha = 0.14f) else accent.copy(alpha = 0.06f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) accent else accent.copy(alpha = 0.18f),
+                shape = RoundedCornerShape(14.dp)
+            )
+            .then(if (selectionMode) Modifier.clickable { onToggleSelect() } else Modifier)
     ) {
         Row(
             modifier              = Modifier.padding(18.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment     = Alignment.Top
+            verticalAlignment     = Alignment.CenterVertically
         ) {
+            if (selectionMode) {
+                Checkbox(
+                    checked         = isSelected,
+                    onCheckedChange = { onToggleSelect() },
+                    colors          = CheckboxDefaults.colors(
+                        checkedColor   = accent,
+                        uncheckedColor = Muted.copy(alpha = 0.4f)
+                    )
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             Column(modifier = Modifier.weight(1f).padding(end = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(shape = RoundedCornerShape(8.dp), color = Green.copy(alpha = 0.15f)) {
+                    Surface(shape = RoundedCornerShape(8.dp), color = accent.copy(alpha = 0.15f)) {
                         Text(
                             "Masă ${order.tableNumber}",
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Green,
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = accent,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
                     Text(formatTimeAgo(order.timestamp), fontSize = 12.sp, color = Muted)
+                    if (isWalkedOut) {
+                        Surface(shape = RoundedCornerShape(6.dp), color = Red.copy(alpha = 0.15f)) {
+                            Text(
+                                "NEPLĂTIT",
+                                fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.5.sp, color = Red,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
                 }
                 if (order.items.isNotEmpty()) {
                     Text(
@@ -1212,13 +1402,17 @@ private fun HistoryOrderCard(order: Order) {
                     )
                 }
             }
-            if (order.totalPrice > 0.0) {
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("${"%.2f".format(order.totalPrice)}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = White)
-                    Text("RON", fontSize = 11.sp, color = Muted)
+            if (!selectionMode) {
+                if (isWalkedOut) {
+                    Icon(Icons.Rounded.ExitToApp, contentDescription = null, tint = Red.copy(alpha = 0.65f), modifier = Modifier.size(22.dp))
+                } else if (order.totalPrice > 0.0) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("${"%.2f".format(order.totalPrice)}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = White)
+                        Text("RON", fontSize = 11.sp, color = Muted)
+                    }
+                } else {
+                    Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Green, modifier = Modifier.size(22.dp))
                 }
-            } else {
-                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Green, modifier = Modifier.size(22.dp))
             }
         }
     }

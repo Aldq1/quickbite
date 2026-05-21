@@ -9,13 +9,16 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Restaurant
+import androidx.activity.compose.rememberLauncherForActivityResult
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanIntentResult
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,7 +27,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -115,13 +117,24 @@ fun ClientDashboardScreen(
 ) {
     val currentUid       = remember { FirebaseAuth.getInstance().currentUser?.uid }
     var uiState          by remember { mutableStateOf<MenuUiState>(MenuUiState.Loading) }
-    var showQrDialog     by remember { mutableStateOf(false) }
     var restaurantIds    by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf("Toate") }
     var activeSession    by remember { mutableStateOf<ActiveSession?>(null) }
-    var sessionChecked   by remember { mutableStateOf(false) }
+    var sessionChecked   by remember { mutableStateOf(true) }
     var isBanned         by remember { mutableStateOf(false) }
-    var banChecked       by remember { mutableStateOf(false) }
+    var banChecked       by remember { mutableStateOf(true) }
+
+    // Camera QR scanner — parses quickbite://order/{restaurantId}/{tableNumber}
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result: ScanIntentResult ->
+        result.contents?.let { content ->
+            val uri = android.net.Uri.parse(content)
+            if (uri.scheme == "quickbite" && uri.host == "order") {
+                val rid    = uri.pathSegments.getOrNull(0) ?: return@let
+                val tblNum = uri.pathSegments.getOrNull(1)?.toIntOrNull() ?: return@let
+                onNavigateToOrdering(rid, tblNum)
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         try {
@@ -195,18 +208,15 @@ fun ClientDashboardScreen(
         val reg = FirebaseFirestore.getInstance()
             .collection("orders")
             .whereEqualTo("occupantUid", currentUid)
-            .whereEqualTo("status", "PENDING")
             .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    sessionChecked = true
-                    return@addSnapshotListener
-                }
-                activeSession = snapshot?.documents?.firstOrNull()?.let { doc ->
-                    val rid = doc.getString("restaurantId") ?: return@let null
-                    val tbl = doc.getLong("tableNumber")?.toInt() ?: return@let null
-                    ActiveSession(rid, tbl)
-                }
-                sessionChecked = true
+                if (error != null) return@addSnapshotListener
+                activeSession = snapshot?.documents
+                    ?.firstOrNull { it.getString("status") == "PENDING" }
+                    ?.let { doc ->
+                        val rid = doc.getString("restaurantId") ?: return@let null
+                        val tbl = doc.getLong("tableNumber")?.toInt() ?: return@let null
+                        ActiveSession(rid, tbl)
+                    }
             }
         onDispose { reg.remove() }
     }
@@ -221,9 +231,8 @@ fun ClientDashboardScreen(
             .collection("banned_users")
             .document(currentUid)
             .addSnapshotListener { snapshot, error ->
-                if (error != null) { banChecked = true; return@addSnapshotListener }
-                isBanned   = snapshot?.exists() == true
-                banChecked = true
+                if (error != null) return@addSnapshotListener
+                isBanned = snapshot?.exists() == true
             }
         onDispose { reg.remove() }
     }
@@ -254,14 +263,22 @@ fun ClientDashboardScreen(
             }
         },
         floatingActionButton = {
-            if (uiState is MenuUiState.Success && sessionChecked && activeSession == null && banChecked && !isBanned) {
+            if (sessionChecked && activeSession == null && banChecked && !isBanned) {
                 FloatingActionButton(
-                    onClick = { showQrDialog = true },
+                    onClick = {
+                        scanLauncher.launch(
+                            ScanOptions().apply {
+                                setPrompt("Scanează codul QR de pe masa ta")
+                                setBeepEnabled(false)
+                                setOrientationLocked(false)
+                            }
+                        )
+                    },
                     containerColor = Brand,
                     contentColor = White,
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scanează QR / Comandă")
+                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scanează QR masă")
                 }
             }
         },
@@ -345,16 +362,6 @@ fun ClientDashboardScreen(
         }
     }
 
-    if (showQrDialog) {
-        QrScanDialog(
-            restaurantIds = restaurantIds,
-            onDismiss     = { showQrDialog = false },
-            onConfirm     = { rid, tableNum ->
-                showQrDialog = false
-                onNavigateToOrdering(rid, tableNum)
-            }
-        )
-    }
 }
 
 // ── Dark header card ──────────────────────────────────────────────────────────
@@ -567,142 +574,6 @@ private fun GlassMenuItemCard(item: ClientMenuItem) {
             }
         }
     }
-}
-
-// ── QR simulation dialog ──────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun QrScanDialog(
-    restaurantIds: List<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (restaurantId: String, tableNumber: Int) -> Unit
-) {
-    var selectedRestaurantId by remember { mutableStateOf(restaurantIds.firstOrNull() ?: "") }
-    var tableInput           by remember { mutableStateOf("1") }
-    var expanded             by remember { mutableStateOf(false) }
-
-    // If the Firestore query finishes after the dialog is already open, the `remember` above
-    // won't re-run. Pick up the first real result as soon as it arrives.
-    LaunchedEffect(restaurantIds) {
-        if (selectedRestaurantId.isBlank() && restaurantIds.isNotEmpty()) {
-            selectedRestaurantId = restaurantIds.first()
-        }
-    }
-
-    val tableNumber = tableInput.toIntOrNull()?.coerceIn(1, 99) ?: 1
-
-    // Dialog surfaces in dark glass style
-    val dialogBg     = Color(0xFF1A1A1A)
-    val dialogBorder = Color(0xFF2A2A2A)
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
-        containerColor = dialogBg,
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Simulare Scanare QR", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                Text("Alege restaurantul și numărul mesei.", fontSize = 13.sp, color = TextSecondary)
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-
-                if (restaurantIds.size > 1) {
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedRestaurantId.take(20) + if (selectedRestaurantId.length > 20) "…" else "",
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Restaurant", color = TextSecondary) },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            modifier = Modifier.fillMaxWidth().menuAnchor(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor   = Brand,
-                                unfocusedBorderColor = dialogBorder,
-                                focusedLabelColor    = Brand,
-                                unfocusedTextColor   = TextPrimary,
-                                focusedTextColor     = TextPrimary
-                            )
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false },
-                            modifier = Modifier.background(dialogBg)
-                        ) {
-                            restaurantIds.forEachIndexed { i, rid ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text("Restaurant ${i + 1}", fontSize = 14.sp, color = TextPrimary)
-                                            Text(
-                                                rid.take(24) + if (rid.length > 24) "…" else "",
-                                                fontSize = 11.sp, color = TextSecondary
-                                            )
-                                        }
-                                    },
-                                    onClick = { selectedRestaurantId = rid; expanded = false }
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    OutlinedTextField(
-                        value = selectedRestaurantId,
-                        onValueChange = { selectedRestaurantId = it },
-                        label = { Text("ID Restaurant", color = TextSecondary) },
-                        placeholder = { Text("UID-ul restaurantului", color = TextSecondary) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor   = Brand,
-                            unfocusedBorderColor = dialogBorder,
-                            focusedLabelColor    = Brand,
-                            unfocusedTextColor   = TextPrimary,
-                            focusedTextColor     = TextPrimary,
-                            cursorColor          = Brand
-                        )
-                    )
-                }
-
-                OutlinedTextField(
-                    value = tableInput,
-                    onValueChange = { v ->
-                        if (v.all { it.isDigit() } && v.length <= 2) tableInput = v
-                    },
-                    label = { Text("Număr masă (1–99)", color = TextSecondary) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = Brand,
-                        unfocusedBorderColor = dialogBorder,
-                        focusedLabelColor    = Brand,
-                        unfocusedTextColor   = TextPrimary,
-                        focusedTextColor     = TextPrimary,
-                        cursorColor          = Brand
-                    )
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(selectedRestaurantId.trim(), tableNumber) },
-                enabled = selectedRestaurantId.isNotBlank() && tableInput.isNotBlank(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Brand)
-            ) {
-                Text("Comandă", color = White, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Anulează", color = TextSecondary) }
-        }
-    )
 }
 
 // ── Banned screen ─────────────────────────────────────────────────────────────

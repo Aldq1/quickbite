@@ -64,4 +64,7 @@ dependencies {
     implementation(libs.maps.compose)
     implementation(libs.play.services.maps)
     implementation(libs.play.services.location)
+
+    // QR code camera scanner
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }
