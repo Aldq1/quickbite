@@ -45,8 +45,14 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.input.KeyboardType
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import java.awt.image.BufferedImage
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -64,6 +70,8 @@ private val EGreen       = Color(0xFF34C759)
 private val EGreenDim    = Color(0x2034C759)
 private val EAmber       = Color(0xFFFF9F0A)
 private val EAmberDim    = Color(0x20FF9F0A)
+private val ERed         = Color(0xFFFF3B30)
+private val ERedDim      = Color(0x20FF3B30)
 private val ETextPrimary = Color(0xFFFFFFFF)
 private val ETextMuted   = Color(0xFF9090A8)
 private val ETextDim     = Color(0xFF5A5A70)
@@ -88,7 +96,7 @@ private val EnterpriseColorScheme = darkColorScheme(
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
-enum class AppRole { NONE, RESTAURANT_ADMIN, PRODUCER, CANDIDATE, KYC_AGENT }
+enum class AppRole { NONE, RESTAURANT_ADMIN, PRODUCER, CANDIDATE, KYC_AGENT, WAITER_LOGIN, WAITER_KDS }
 private enum class AdminTab { OPERATIONAL, ACQUISITIONS, RECRUITMENT, MENU_MANAGER, TABLE_CONFIG }
 private val MENU_CATEGORIES = listOf("Pizza", "Paste", "Carne", "Pește", "Salate", "Supe", "Desert", "Băuturi", "Altele")
 
@@ -117,7 +125,22 @@ private data class RestaurantTable(
     val id: String = "",
     val tableNumber: Int = 0,
     val capacity: Int = 0,
-    val status: String = "LIBERA"
+    val status: String = "Liberă"
+)
+
+private data class KdsOrderItem(
+    val name    : String = "",
+    val category: String = "",
+    val price   : Double = 0.0,
+    val quantity: Int    = 1
+)
+
+private data class KdsOrder(
+    val id         : String             = "",
+    val tableNumber: Int                = 0,
+    val items      : List<KdsOrderItem> = emptyList(),
+    val totalPrice : Double             = 0.0,
+    val timestamp  : Long               = 0L
 )
 
 // ── Firestore real-time flows ─────────────────────────────────────────────────
@@ -163,8 +186,8 @@ private fun hrCvsFlow(db: Firestore): Flow<List<HrApplication>> = callbackFlow {
     awaitClose { reg.remove() }
 }
 
-private fun menuItemsFlow(db: Firestore): Flow<List<MenuItem>> = callbackFlow {
-    val reg = db.collection("menu")
+private fun menuItemsFlow(db: Firestore, restaurantId: String): Flow<List<MenuItem>> = callbackFlow {
+    val reg = db.collection("restaurants").document(restaurantId).collection("menu")
         .addSnapshotListener { snapshot, error ->
             if (error != null || snapshot == null) return@addSnapshotListener
             trySend(
@@ -182,8 +205,8 @@ private fun menuItemsFlow(db: Firestore): Flow<List<MenuItem>> = callbackFlow {
     awaitClose { reg.remove() }
 }
 
-private fun tablesConfigFlow(db: Firestore): Flow<List<RestaurantTable>> = callbackFlow {
-    val reg = db.collection("tables")
+private fun tablesConfigFlow(db: Firestore, restaurantId: String): Flow<List<RestaurantTable>> = callbackFlow {
+    val reg = db.collection("restaurants").document(restaurantId).collection("tables")
         .addSnapshotListener { snapshot, error ->
             if (error != null || snapshot == null) return@addSnapshotListener
             trySend(
@@ -192,7 +215,59 @@ private fun tablesConfigFlow(db: Firestore): Flow<List<RestaurantTable>> = callb
                         id          = doc.id,
                         tableNumber = doc.getLong("tableNumber")?.toInt() ?: return@mapNotNull null,
                         capacity    = doc.getLong("capacity")?.toInt() ?: 0,
-                        status      = doc.getString("status") ?: "LIBERA"
+                        status      = doc.getString("status") ?: "Liberă"
+                    )
+                }.sortedBy { it.tableNumber }
+            )
+        }
+    awaitClose { reg.remove() }
+}
+
+private fun kdsOrdersFlow(db: Firestore, restaurantId: String): Flow<List<KdsOrder>> = callbackFlow {
+    val reg = db.collection("restaurants").document(restaurantId)
+        .collection("orders")
+        .whereEqualTo("status", "PRIMITA")
+        .addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) return@addSnapshotListener
+            trySend(
+                snapshot.documents.mapNotNull { doc ->
+                    @Suppress("UNCHECKED_CAST")
+                    val rawItems = (doc.get("items") as? List<*>)
+                        ?.filterIsInstance<Map<String, Any>>()
+                        ?: emptyList()
+                    KdsOrder(
+                        id          = doc.id,
+                        tableNumber = doc.getLong("tableNumber")?.toInt() ?: return@mapNotNull null,
+                        items       = rawItems.map { m ->
+                            KdsOrderItem(
+                                name     = m["name"]     as? String ?: "",
+                                category = m["category"] as? String ?: "",
+                                price    = (m["price"]    as? Number)?.toDouble() ?: 0.0,
+                                quantity = (m["quantity"] as? Number)?.toInt()    ?: 1
+                            )
+                        },
+                        totalPrice  = doc.getDouble("totalPrice") ?: 0.0,
+                        timestamp   = doc.getLong("timestamp") ?: 0L
+                    )
+                }.sortedByDescending { it.timestamp }
+            )
+        }
+    awaitClose { reg.remove() }
+}
+
+private fun kdsCleaningAlertsFlow(db: Firestore, restaurantId: String): Flow<List<RestaurantTable>> = callbackFlow {
+    val reg = db.collection("restaurants").document(restaurantId)
+        .collection("tables")
+        .whereEqualTo("status", "SOLICITARE_CURATENIE")
+        .addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) return@addSnapshotListener
+            trySend(
+                snapshot.documents.mapNotNull { doc ->
+                    RestaurantTable(
+                        id          = doc.id,
+                        tableNumber = doc.getLong("tableNumber")?.toInt() ?: return@mapNotNull null,
+                        capacity    = doc.getLong("capacity")?.toInt() ?: 0,
+                        status      = "SOLICITARE_CURATENIE"
                     )
                 }.sortedBy { it.tableNumber }
             )
@@ -204,7 +279,9 @@ private fun tablesConfigFlow(db: Firestore): Flow<List<RestaurantTable>> = callb
 
 @Composable
 fun EnterpriseSuiteApp(db: Firestore?) {
-    var currentRole by remember { mutableStateOf(AppRole.NONE) }
+    var currentRole        by remember { mutableStateOf(AppRole.NONE) }
+    var currentUid         by remember { mutableStateOf("") }
+    var waiterRestaurantId by remember { mutableStateOf("") }
 
     MaterialTheme(colorScheme = EnterpriseColorScheme) {
         AnimatedContent(
@@ -216,15 +293,37 @@ fun EnterpriseSuiteApp(db: Firestore?) {
         ) { role ->
             when (role) {
                 AppRole.NONE ->
-                    AuthScreen(db = db, onAuthenticated = { currentRole = it })
+                    AuthScreen(
+                        db              = db,
+                        onAuthenticated = { appRole, uid ->
+                            currentUid  = uid
+                            currentRole = appRole
+                        },
+                        onWaiterAccess  = { currentRole = AppRole.WAITER_LOGIN }
+                    )
                 AppRole.RESTAURANT_ADMIN ->
-                    RestaurantAdminPortal(db = db, onBack = { currentRole = AppRole.NONE })
+                    RestaurantAdminPortal(db = db, restaurantId = currentUid, onBack = { currentRole = AppRole.NONE })
                 AppRole.PRODUCER ->
                     ProducerPortal(db = db, onBack = { currentRole = AppRole.NONE })
                 AppRole.CANDIDATE ->
                     CandidatePortal(db = db, onBack = { currentRole = AppRole.NONE })
                 AppRole.KYC_AGENT ->
                     KycAgentPanel(db = db, onBack = { currentRole = AppRole.NONE })
+                AppRole.WAITER_LOGIN ->
+                    WaiterLoginScreen(
+                        onConnect = { code ->
+                            waiterRestaurantId = code
+                            currentRole = AppRole.WAITER_KDS
+                        },
+                        onBack = { currentRole = AppRole.NONE }
+                    )
+                AppRole.WAITER_KDS ->
+                    LiveKdsGridScreen(
+                        db           = db,
+                        restaurantId = waiterRestaurantId,
+                        isFullscreen = true,
+                        onBack       = { currentRole = AppRole.WAITER_LOGIN }
+                    )
             }
         }
     }
@@ -405,7 +504,7 @@ private fun RoleCard(
 // ── Restaurant Admin Portal ───────────────────────────────────────────────────
 
 @Composable
-private fun RestaurantAdminPortal(db: Firestore?, onBack: () -> Unit) {
+private fun RestaurantAdminPortal(db: Firestore?, restaurantId: String, onBack: () -> Unit) {
     var selectedTab      by remember { mutableStateOf(AdminTab.OPERATIONAL) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -443,11 +542,11 @@ private fun RestaurantAdminPortal(db: Firestore?, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f).fillMaxHeight()
             ) { tab ->
                 when (tab) {
-                    AdminTab.OPERATIONAL  -> OperationalSystemPlaceholder(db = db, onBack = onBack)
+                    AdminTab.OPERATIONAL  -> KdsOrderDashboard(db = db, restaurantId = restaurantId, snackbarHostState = snackbarHostState)
                     AdminTab.ACQUISITIONS -> AcquisitionsTab(db = db, snackbarHostState = snackbarHostState)
                     AdminTab.RECRUITMENT  -> RecruitmentTab(db = db, snackbarHostState = snackbarHostState)
-                    AdminTab.MENU_MANAGER -> MenuManagerScreen(db = db, snackbarHostState = snackbarHostState)
-                    AdminTab.TABLE_CONFIG -> TableManagerScreen(db = db, snackbarHostState = snackbarHostState)
+                    AdminTab.MENU_MANAGER -> MenuManagerScreen(db = db, restaurantId = restaurantId, snackbarHostState = snackbarHostState)
+                    AdminTab.TABLE_CONFIG -> TableManagerScreen(db = db, restaurantId = restaurantId, snackbarHostState = snackbarHostState)
                 }
             }
         }
@@ -1365,17 +1464,120 @@ fun OperationalSystemPlaceholder(db: Firestore?, onBack: () -> Unit) {
     }
 }
 
+// ── Waiter login screen ───────────────────────────────────────────────────────
+
+@Composable
+private fun WaiterLoginScreen(onConnect: (restaurantId: String) -> Unit, onBack: () -> Unit) {
+    var code      by remember { mutableStateOf("") }
+    val canSubmit = code.trim().isNotBlank()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(Color(0xFF0A0B18), EBg))),
+        contentAlignment = Alignment.Center
+    ) {
+        TextButton(
+            onClick  = onBack,
+            modifier = Modifier.align(Alignment.TopStart).padding(20.dp)
+        ) {
+            Icon(Icons.Rounded.ArrowBack, null, tint = ETextMuted, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Înapoi", color = ETextMuted, fontSize = 14.sp)
+        }
+
+        ElevatedCard(
+            shape     = RoundedCornerShape(28.dp),
+            colors    = CardDefaults.elevatedCardColors(containerColor = ESurface),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 24.dp),
+            modifier  = Modifier.width(440.dp)
+        ) {
+            Column(
+                modifier            = Modifier.padding(40.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier            = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier         = Modifier
+                            .size(56.dp)
+                            .background(EOrange, RoundedCornerShape(16.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Rounded.TableRestaurant, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        "Acces Ospătari",
+                        fontSize      = 22.sp,
+                        fontWeight    = FontWeight.ExtraBold,
+                        color         = ETextPrimary,
+                        letterSpacing = (-0.4).sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Introduceți codul restaurantului pentru a accesa KDS-ul live",
+                        fontSize   = 13.sp,
+                        color      = ETextMuted,
+                        textAlign  = TextAlign.Center,
+                        lineHeight = 20.sp
+                    )
+                }
+
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+
+                OutlinedTextField(
+                    value         = code,
+                    onValueChange = { code = it },
+                    label         = { Text("Cod Restaurant (ID)") },
+                    modifier      = Modifier.fillMaxWidth(),
+                    singleLine    = true,
+                    shape         = RoundedCornerShape(12.dp),
+                    leadingIcon   = {
+                        Icon(Icons.Rounded.QrCode, null, tint = ETextMuted, modifier = Modifier.size(18.dp))
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor      = EOrange,
+                        unfocusedBorderColor    = EGlassBorder,
+                        focusedLabelColor       = EOrange,
+                        unfocusedLabelColor     = ETextMuted,
+                        focusedTextColor        = ETextPrimary,
+                        unfocusedTextColor      = ETextPrimary,
+                        cursorColor             = EOrange,
+                        focusedContainerColor   = EGlass,
+                        unfocusedContainerColor = EGlass
+                    )
+                )
+
+                Button(
+                    onClick  = { onConnect(code.trim()) },
+                    enabled  = canSubmit,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape    = RoundedCornerShape(14.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = EOrange)
+                ) {
+                    Icon(Icons.Rounded.TableRestaurant, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Conectează-te", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                }
+            }
+        }
+    }
+}
+
 // ── Menu manager tab ──────────────────────────────────────────────────────────
 
 @Composable
-private fun MenuManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostState) {
+private fun MenuManagerScreen(db: Firestore?, restaurantId: String, snackbarHostState: SnackbarHostState) {
     val scope = rememberCoroutineScope()
     var items         by remember { mutableStateOf<List<MenuItem>?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(db) {
         if (db == null) { items = emptyList(); return@LaunchedEffect }
-        menuItemsFlow(db).collect { items = it }
+        menuItemsFlow(db, restaurantId).collect { items = it }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1443,7 +1645,7 @@ private fun MenuManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostSta
                             scope.launch {
                                 try {
                                     withContext(Dispatchers.IO) {
-                                        db.collection("menu").document(item.id).delete().get()
+                                        db.collection("restaurants").document(restaurantId).collection("menu").document(item.id).delete().get()
                                     }
                                     snackbarHostState.showSnackbar("\"${item.name}\" a fost eliminat din meniu.")
                                 } catch (e: Exception) {
@@ -1465,7 +1667,7 @@ private fun MenuManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostSta
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            db!!.collection("menu").add(
+                            db!!.collection("restaurants").document(restaurantId).collection("menu").add(
                                 mapOf(
                                     "name"        to name,
                                     "description" to description,
@@ -1652,14 +1854,15 @@ private fun AddMenuItemDialog(
 // ── Table configuration tab ───────────────────────────────────────────────────
 
 @Composable
-private fun TableManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostState) {
+private fun TableManagerScreen(db: Firestore?, restaurantId: String, snackbarHostState: SnackbarHostState) {
     val scope = rememberCoroutineScope()
     var tables        by remember { mutableStateOf<List<RestaurantTable>?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var qrTable       by remember { mutableStateOf<RestaurantTable?>(null) }
 
     LaunchedEffect(db) {
         if (db == null) { tables = emptyList(); return@LaunchedEffect }
-        tablesConfigFlow(db).collect { tables = it }
+        tablesConfigFlow(db, restaurantId).collect { tables = it }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1722,12 +1925,30 @@ private fun TableManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostSt
             ) {
                 gridItems(tables!!, key = { it.id }) { table ->
                     TableConfigCard(
-                        table    = table,
-                        onDelete = {
+                        table          = table,
+                        onShowQr       = { qrTable = table },
+                        onToggleStatus = {
+                            scope.launch {
+                                try {
+                                    val newStatus = if (table.status == "Liberă") "Ocupată" else "Liberă"
+                                    withContext(Dispatchers.IO) {
+                                        db.collection("restaurants").document(restaurantId)
+                                            .collection("tables").document(table.id)
+                                            .update(mapOf("status" to newStatus))
+                                            .get()
+                                    }
+                                } catch (e: Exception) {
+                                    snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                                }
+                            }
+                        },
+                        onDelete       = {
                             scope.launch {
                                 try {
                                     withContext(Dispatchers.IO) {
-                                        db.collection("tables").document(table.id).delete().get()
+                                        db.collection("restaurants").document(restaurantId)
+                                            .collection("tables").document(table.id)
+                                            .delete().get()
                                     }
                                     snackbarHostState.showSnackbar("Masa ${table.tableNumber} a fost eliminată.")
                                 } catch (e: Exception) {
@@ -1741,6 +1962,14 @@ private fun TableManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostSt
         }
     }
 
+    qrTable?.let { table ->
+        QrTableDialog(
+            table        = table,
+            restaurantId = restaurantId,
+            onDismiss    = { qrTable = null }
+        )
+    }
+
     if (showAddDialog) {
         AddTableDialog(
             onDismiss = { showAddDialog = false },
@@ -1749,11 +1978,11 @@ private fun TableManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostSt
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            db!!.collection("tables").add(
+                            db!!.collection("restaurants").document(restaurantId).collection("tables").add(
                                 mapOf(
                                     "tableNumber" to tableNumber,
                                     "capacity"    to capacity,
-                                    "status"      to "LIBERA"
+                                    "status"      to "Liberă"
                                 )
                             ).get()
                         }
@@ -1768,17 +1997,23 @@ private fun TableManagerScreen(db: Firestore?, snackbarHostState: SnackbarHostSt
 }
 
 @Composable
-private fun TableConfigCard(table: RestaurantTable, onDelete: () -> Unit) {
+private fun TableConfigCard(
+    table         : RestaurantTable,
+    onToggleStatus: () -> Unit,
+    onDelete      : () -> Unit,
+    onShowQr      : () -> Unit
+) {
     val (statusColor, statusLabel) = when (table.status) {
-        "OCUPATA"   -> EOrange to "Ocupată"
-        "REZERVATA" -> EAmber  to "Rezervată"
-        else        -> EGreen  to "Liberă"
+        "Ocupată", "OCUPATA"     -> ERed   to "Ocupată"
+        "Rezervată", "REZERVATA" -> EAmber to "Rezervată"
+        else                     -> EGreen to "Liberă"
     }
 
     ElevatedCard(
+        onClick   = onToggleStatus,
         shape     = RoundedCornerShape(18.dp),
         colors    = CardDefaults.elevatedCardColors(containerColor = ESurface),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp, pressedElevation = 12.dp),
         modifier  = Modifier.fillMaxWidth()
     ) {
         Column {
@@ -1830,15 +2065,512 @@ private fun TableConfigCard(table: RestaurantTable, onDelete: () -> Unit) {
 
                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    // QR generator button
+                    TextButton(
+                        onClick = onShowQr,
+                        colors  = ButtonDefaults.textButtonColors(contentColor = EBrand)
+                    ) {
+                        Icon(Icons.Rounded.QrCode, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("QR", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
                     TextButton(
                         onClick = onDelete,
-                        colors  = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF3B30))
+                        colors  = ButtonDefaults.textButtonColors(contentColor = ERed)
                     ) {
                         Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Șterge", fontSize = 12.sp)
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── QR code generation ────────────────────────────────────────────────────────
+
+private fun buildQrBitmap(content: String, sizePx: Int = 512): ImageBitmap {
+    val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx)
+    val bmp    = BufferedImage(sizePx, sizePx, BufferedImage.TYPE_INT_RGB)
+    for (x in 0 until sizePx) {
+        for (y in 0 until sizePx) {
+            bmp.setRGB(x, y, if (matrix[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
+        }
+    }
+    return bmp.toComposeImageBitmap()
+}
+
+@Composable
+private fun QrCodeView(content: String, modifier: Modifier = Modifier) {
+    val bitmap = remember(content) {
+        runCatching { buildQrBitmap(content) }.getOrNull()
+    }
+    if (bitmap != null) {
+        Image(bitmap = bitmap, contentDescription = "QR Code", modifier = modifier)
+    } else {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Text("Eroare QR", color = ETextMuted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun QrTableDialog(
+    table       : RestaurantTable,
+    restaurantId: String,
+    onDismiss   : () -> Unit
+) {
+    val qrContent = "${restaurantId}_${table.id}_${table.tableNumber}"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = ESurface,
+        shape            = RoundedCornerShape(24.dp),
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "QR · Masa ${table.tableNumber}",
+                    fontSize      = 20.sp,
+                    fontWeight    = FontWeight.ExtraBold,
+                    color         = ETextPrimary,
+                    textAlign     = TextAlign.Center
+                )
+                Text(
+                    "Afișați codul la masă pentru a permite comenzile mobile",
+                    fontSize  = 13.sp,
+                    color     = ETextMuted,
+                    textAlign = TextAlign.Center
+                )
+            }
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier            = Modifier.fillMaxWidth()
+            ) {
+                // QR code on white background
+                Box(
+                    modifier = Modifier
+                        .size(260.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White)
+                        .border(1.dp, EGlassBorder, RoundedCornerShape(16.dp))
+                        .padding(16.dp)
+                ) {
+                    QrCodeView(content = qrContent, modifier = Modifier.fillMaxSize())
+                }
+
+                // Content string (for debugging / manual entry)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(EGlass)
+                        .border(1.dp, EGlassBorder, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        qrContent,
+                        fontSize  = 11.sp,
+                        color     = ETextMuted,
+                        textAlign = TextAlign.Center,
+                        modifier  = Modifier.fillMaxWidth(),
+                        maxLines  = 2,
+                        overflow  = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick  = onDismiss,
+                shape    = RoundedCornerShape(12.dp),
+                colors   = ButtonDefaults.buttonColors(containerColor = EBrand),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Închide", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    )
+}
+
+// ── KDS order dashboard ───────────────────────────────────────────────────────
+
+private fun elapsedLabel(timestamp: Long): String {
+    val sec = (System.currentTimeMillis() - timestamp) / 1000L
+    return when {
+        sec < 60   -> "${sec}s"
+        sec < 3600 -> "${sec / 60}min"
+        else       -> "${sec / 3600}h ${(sec % 3600) / 60}min"
+    }
+}
+
+@Composable
+private fun KdsOrderDashboard(
+    db               : Firestore?,
+    restaurantId     : String,
+    snackbarHostState: SnackbarHostState
+) {
+    val scope          = rememberCoroutineScope()
+    var orders         by remember { mutableStateOf<List<KdsOrder>?>(null) }
+    var cleaningAlerts by remember { mutableStateOf<List<RestaurantTable>>(emptyList()) }
+
+    LaunchedEffect(db, restaurantId) {
+        if (db == null) { orders = emptyList(); return@LaunchedEffect }
+        launch { kdsOrdersFlow(db, restaurantId).collect { orders = it } }
+        kdsCleaningAlertsFlow(db, restaurantId).collect { cleaningAlerts = it }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+
+        // ── Header ──────────────────────────────────────────────────────────────
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 22.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "Operațional KDS",
+                    fontSize      = 24.sp,
+                    fontWeight    = FontWeight.ExtraBold,
+                    color         = ETextPrimary,
+                    letterSpacing = (-0.4).sp
+                )
+                Text("Comenzi primite · Alerte mese în timp real", fontSize = 14.sp, color = ETextMuted)
+            }
+            orders?.let { list ->
+                EnterpriseCountBadge(count = list.size, label = "comenzi active", color = EAmber)
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+
+        if (db == null) {
+            FirebaseOfflineWarning(modifier = Modifier.fillMaxSize())
+            return@Column
+        }
+
+        // ── Cleaning alerts strip ────────────────────────────────────────────────
+        AnimatedVisibility(
+            visible = cleaningAlerts.isNotEmpty(),
+            enter   = expandVertically() + fadeIn(tween(200)),
+            exit    = shrinkVertically() + fadeOut(tween(160))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ERed.copy(alpha = 0.07f))
+            ) {
+                Row(
+                    modifier              = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 10.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Rounded.Warning, null, tint = ERed, modifier = Modifier.size(14.dp))
+                    Text(
+                        "SOLICITĂRI CURĂȚENIE",
+                        fontSize      = 10.sp,
+                        fontWeight    = FontWeight.ExtraBold,
+                        color         = ERed,
+                        letterSpacing = 1.5.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ERed.copy(alpha = 0.15f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            cleaningAlerts.size.toString(),
+                            fontSize   = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color      = ERed
+                        )
+                    }
+                }
+                Column(
+                    modifier            = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    cleaningAlerts.forEach { table ->
+                        CleaningAlertRow(
+                            table     = table,
+                            onCleaned = {
+                                scope.launch {
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            db.collection("restaurants").document(restaurantId)
+                                                .collection("tables").document(table.id)
+                                                .update(mapOf("status" to "Liberă"))
+                                                .get()
+                                        }
+                                        snackbarHostState.showSnackbar(
+                                            "Masa ${table.tableNumber} curățată și eliberată ✓"
+                                        )
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(ERed.copy(alpha = 0.18f)))
+            }
+        }
+
+        // ── Orders grid ──────────────────────────────────────────────────────────
+        Box(modifier = Modifier.weight(1f)) {
+            when {
+                orders == null -> Box(
+                    modifier         = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = EAmber, strokeWidth = 2.5.dp)
+                }
+
+                orders!!.isEmpty() -> EnterpriseEmptyState(
+                    icon     = Icons.Rounded.TableRestaurant,
+                    title    = "Nicio comandă nouă",
+                    subtitle = "Comenzile primite de la clienți\napor apărea automat aici.",
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                else -> LazyVerticalGrid(
+                    columns               = GridCells.Adaptive(minSize = 280.dp),
+                    modifier              = Modifier.fillMaxSize(),
+                    contentPadding        = PaddingValues(24.dp),
+                    verticalArrangement   = Arrangement.spacedBy(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    gridItems(orders!!, key = { it.id }) { order ->
+                        KdsOrderCard(
+                            order      = order,
+                            onFinalize = {
+                                scope.launch {
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            db.collection("restaurants").document(restaurantId)
+                                                .collection("orders").document(order.id)
+                                                .update(mapOf("status" to "FINALIZATA"))
+                                                .get()
+                                        }
+                                        snackbarHostState.showSnackbar(
+                                            "Comanda de la Masa ${order.tableNumber} finalizată ✓"
+                                        )
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("Eroare: ${e.message}")
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CleaningAlertRow(table: RestaurantTable, onCleaned: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(ERed.copy(alpha = 0.09f))
+            .border(1.dp, ERed.copy(alpha = 0.28f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier         = Modifier
+                    .size(38.dp)
+                    .background(ERed.copy(alpha = 0.14f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Warning, null, tint = ERed, modifier = Modifier.size(18.dp))
+            }
+            Column {
+                Text(
+                    "Masa ${table.tableNumber}",
+                    fontSize   = 15.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color      = ETextPrimary
+                )
+                Text("Curățenie solicitată de client", fontSize = 12.sp, color = ERed)
+            }
+        }
+        Button(
+            onClick  = onCleaned,
+            shape    = RoundedCornerShape(10.dp),
+            colors   = ButtonDefaults.buttonColors(containerColor = EGreen),
+            modifier = Modifier.height(38.dp)
+        ) {
+            Icon(Icons.Rounded.CheckCircle, null, tint = Color.White, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Curățat · Eliberează", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+        }
+    }
+}
+
+@Composable
+private fun KdsOrderCard(order: KdsOrder, onFinalize: () -> Unit) {
+    ElevatedCard(
+        shape     = RoundedCornerShape(20.dp),
+        colors    = CardDefaults.elevatedCardColors(containerColor = ESurface),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp),
+        modifier  = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            // ── Amber header band ──────────────────────────────────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(
+                            listOf(EAmber.copy(alpha = 0.22f), EAmber.copy(alpha = 0.05f))
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier         = Modifier
+                                .size(34.dp)
+                                .background(EAmber.copy(alpha = 0.18f), RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Rounded.TableRestaurant, null, tint = EAmber, modifier = Modifier.size(17.dp))
+                        }
+                        Text(
+                            "Masa ${order.tableNumber}",
+                            fontSize   = 17.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color      = ETextPrimary
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(EAmber.copy(alpha = 0.16f))
+                            .border(1.dp, EAmber.copy(alpha = 0.38f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            "⏱ ${elapsedLabel(order.timestamp)}",
+                            fontSize   = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color      = EAmber
+                        )
+                    }
+                }
+            }
+
+            // ── Items list ─────────────────────────────────────────────────────
+            Column(
+                modifier            = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                order.items.forEach { item ->
+                    Row(
+                        modifier              = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment     = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment     = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier              = Modifier.weight(1f).padding(end = 8.dp)
+                        ) {
+                            Box(
+                                modifier         = Modifier
+                                    .size(22.dp)
+                                    .background(EBrandDim, RoundedCornerShape(6.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    item.quantity.toString(),
+                                    fontSize   = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color      = EBrand
+                                )
+                            }
+                            Text(
+                                item.name,
+                                fontSize = 13.sp,
+                                color    = ETextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (item.price > 0.0) {
+                            Text(
+                                "%.2f RON".format(item.price * item.quantity),
+                                fontSize   = 12.sp,
+                                color      = ETextMuted,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(EGlassBorder))
+                Spacer(Modifier.height(6.dp))
+
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text("Total", fontSize = 13.sp, color = ETextMuted)
+                    Text(
+                        "%.2f RON".format(order.totalPrice),
+                        fontSize      = 18.sp,
+                        fontWeight    = FontWeight.ExtraBold,
+                        color         = EAmber,
+                        letterSpacing = (-0.3).sp
+                    )
+                }
+
+                Spacer(Modifier.height(6.dp))
+
+                Button(
+                    onClick  = onFinalize,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape    = RoundedCornerShape(12.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = EGreen)
+                ) {
+                    Icon(Icons.Rounded.CheckCircle, null, tint = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "Finalizează Comanda",
+                        fontSize   = 14.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color      = Color.White
+                    )
                 }
             }
         }

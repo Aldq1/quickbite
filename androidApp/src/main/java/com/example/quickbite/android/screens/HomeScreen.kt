@@ -30,8 +30,7 @@ fun HomeScreen(navController: NavController) {
             .addOnSuccessListener { doc ->
                 val route = when (doc.getString("role")) {
                     "RESTAURANT"   -> "restaurant_dashboard"
-                    // CLIENT must scan the QR at their table — no manual table selection allowed
-                    "CLIENT"       -> "client_dashboard"
+                    "CLIENT"       -> "client_home_feed"
                     "PRODUCER"     -> "producer_dashboard"
                     "PROFESSIONAL" -> "professional_dashboard"
                     else           -> "role_selection"
@@ -41,7 +40,7 @@ fun HomeScreen(navController: NavController) {
                 }
             }
             .addOnFailureListener {
-                navController.navigate("client_dashboard") {
+                navController.navigate("client_home_feed") {
                     popUpTo("home") { inclusive = true }
                 }
             }

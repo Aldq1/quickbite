@@ -59,13 +59,14 @@ class AuthStateHolder(private val db: Firestore?) {
 
     var isLoading    by mutableStateOf(false);    private set
     var errorMessage by mutableStateOf<String?>(null); private set
+    var loggedInUid  by mutableStateOf(""); private set
 
     private val authClient = FirebaseAuthRestClient(FIREBASE_WEB_API_KEY)
     private val scope      = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     // ── Login ─────────────────────────────────────────────────────────────────
 
-    fun login(email: String, password: String, onSuccess: (AppRole) -> Unit) {
+    fun login(email: String, password: String, onSuccess: (AppRole, String) -> Unit) {
         scope.launch {
             isLoading    = true
             errorMessage = null
@@ -86,18 +87,19 @@ class AuthStateHolder(private val db: Firestore?) {
 
                 val role      = userDoc.getString("role")       ?: ""
                 val kycStatus = userDoc.getString("kyc_status")
+                loggedInUid   = uid
 
                 when (role) {
                     "Restaurant" -> when (kycStatus) {
                         "PENDING"  -> errorMessage =
                             "Contul dumneavoastră este în curs de verificare KYC. " +
                             "Accesul va fi permis după aprobarea unui agent."
-                        "APPROVED" -> onSuccess(AppRole.RESTAURANT_ADMIN)
+                        "APPROVED" -> onSuccess(AppRole.RESTAURANT_ADMIN, uid)
                         else       -> errorMessage = "Statut KYC nerecunoscut. Contactați suportul."
                     }
-                    "Agent KYC"        -> onSuccess(AppRole.KYC_AGENT)
-                    "Producător (B2B)" -> onSuccess(AppRole.PRODUCER)
-                    "Candidat HR"      -> onSuccess(AppRole.CANDIDATE)
+                    "Agent KYC"        -> onSuccess(AppRole.KYC_AGENT, uid)
+                    "Producător (B2B)" -> onSuccess(AppRole.PRODUCER, uid)
+                    "Candidat HR"      -> onSuccess(AppRole.CANDIDATE, uid)
                     else               -> errorMessage = "Rol de cont nerecunoscut: \"$role\"."
                 }
             } catch (e: Exception) {
@@ -232,7 +234,7 @@ private val AGreen   = Color(0xFF34C759)
 private val ARed     = Color(0xFFFF3B30)
 
 @Composable
-fun AuthScreen(db: Firestore?, onAuthenticated: (AppRole) -> Unit) {
+fun AuthScreen(db: Firestore?, onAuthenticated: (AppRole, String) -> Unit, onWaiterAccess: () -> Unit = {}) {
     val holder = remember(db) { AuthStateHolder(db) }
     DisposableEffect(holder) { onDispose { holder.dispose() } }
 
@@ -306,6 +308,17 @@ fun AuthScreen(db: Firestore?, onAuthenticated: (AppRole) -> Unit) {
                 }
             }
         }
+
+        TextButton(
+            onClick  = onWaiterAccess,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 28.dp)
+        ) {
+            Icon(Icons.Rounded.TableRestaurant, null, tint = AMuted, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(7.dp))
+            Text("Acces Ospătari", color = AMuted, fontSize = 13.sp)
+        }
     }
 }
 
@@ -376,7 +389,7 @@ private fun AuthTabButton(label: String, isActive: Boolean, onClick: () -> Unit,
 // ── Login form ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun LoginForm(holder: AuthStateHolder, onAuthenticated: (AppRole) -> Unit) {
+private fun LoginForm(holder: AuthStateHolder, onAuthenticated: (AppRole, String) -> Unit) {
     var email   by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPwd by remember { mutableStateOf(false) }

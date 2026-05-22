@@ -17,14 +17,19 @@ data class Order(
 )
 
 object OrderStatus {
-    const val PENDING   = "PENDING"
-    const val COOKING   = "COOKING"    // kitchen accepted, in preparation
-    const val DELIVERED = "DELIVERED"
-    const val COMPLETED = "COMPLETED"
+    const val PENDING    = "PENDING"
+    const val PRIMITA    = "PRIMITA"      // received by kitchen — Romanian QR flow
+    const val COOKING    = "COOKING"
+    const val FINALIZATA = "FINALIZATA"   // completed — Romanian QR flow
+    const val DELIVERED  = "DELIVERED"
+    const val COMPLETED  = "COMPLETED"
 }
 
 object TableStatus {
-    const val FREE               = "FREE"
-    const val OCCUPIED           = "OCCUPIED"
-    const val PAYMENT_REQUESTED  = "PAYMENT_REQUESTED"
+    const val FREE                 = "FREE"
+    const val LIBERA               = "Liberă"               // Romanian QR flow
+    const val OCCUPIED             = "OCCUPIED"
+    const val OCUPATA              = "OCUPATA"              // Romanian QR flow
+    const val SOLICITARE_CURATENIE = "SOLICITARE_CURATENIE" // cleaning requested
+    const val PAYMENT_REQUESTED    = "PAYMENT_REQUESTED"
 }

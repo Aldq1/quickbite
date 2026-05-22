@@ -15,10 +15,6 @@ import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Restaurant
-import androidx.activity.compose.rememberLauncherForActivityResult
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanIntentResult
-import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -68,10 +64,10 @@ private data class ClientMenuItem(
     val price: Double = 0.0
 )
 
-private sealed interface MenuUiState {
-    object Loading : MenuUiState
-    object Empty : MenuUiState
-    data class Success(val items: List<ClientMenuItem>) : MenuUiState
+private sealed interface DashboardUiState {
+    object Loading : DashboardUiState
+    object Empty : DashboardUiState
+    data class Success(val items: List<ClientMenuItem>) : DashboardUiState
 }
 
 private data class ActiveSession(val restaurantId: String, val tableNumber: Int)
@@ -112,29 +108,18 @@ private val DEMO_CLIENT_ITEMS = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ClientDashboardScreen(
-    onNavigateToOrdering: (restaurantId: String, tableNumber: Int) -> Unit,
-    onSignOut: () -> Unit
+    onNavigateToOrdering  : (restaurantId: String, tableNumber: Int) -> Unit,
+    onNavigateToQrScanner : () -> Unit,
+    onSignOut             : () -> Unit
 ) {
     val currentUid       = remember { FirebaseAuth.getInstance().currentUser?.uid }
-    var uiState          by remember { mutableStateOf<MenuUiState>(MenuUiState.Loading) }
+    var uiState          by remember { mutableStateOf<DashboardUiState>(DashboardUiState.Loading) }
     var restaurantIds    by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf("Toate") }
     var activeSession    by remember { mutableStateOf<ActiveSession?>(null) }
     var sessionChecked   by remember { mutableStateOf(true) }
     var isBanned         by remember { mutableStateOf(false) }
     var banChecked       by remember { mutableStateOf(true) }
-
-    // Camera QR scanner — parses quickbite://order/{restaurantId}/{tableNumber}
-    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result: ScanIntentResult ->
-        result.contents?.let { content ->
-            val uri = android.net.Uri.parse(content)
-            if (uri.scheme == "quickbite" && uri.host == "order") {
-                val rid    = uri.pathSegments.getOrNull(0) ?: return@let
-                val tblNum = uri.pathSegments.getOrNull(1)?.toIntOrNull() ?: return@let
-                onNavigateToOrdering(rid, tblNum)
-            }
-        }
-    }
 
     LaunchedEffect(Unit) {
         try {
@@ -164,7 +149,7 @@ fun ClientDashboardScreen(
             if (rawItems.isEmpty()) {
                 // No Firestore data — fall back to demo content so the app is never empty
                 restaurantIds = listOf(DEMO_RESTAURANT_ID)
-                uiState = MenuUiState.Success(DEMO_CLIENT_ITEMS)
+                uiState = DashboardUiState.Success(DEMO_CLIENT_ITEMS)
                 return@LaunchedEffect
             }
 
@@ -188,14 +173,14 @@ fun ClientDashboardScreen(
             val enriched = rawItems.map { item ->
                 item.copy(restaurantName = nameMap[item.restaurantId] ?: item.restaurantId.take(8))
             }
-            uiState = MenuUiState.Success(enriched)
+            uiState = DashboardUiState.Success(enriched)
 
         } catch (e: CancellationException) {
             throw e // always rethrow so structured concurrency is preserved
         } catch (_: Exception) {
             // Network/Firestore error — show demo content so the screen is never blank
             restaurantIds = listOf(DEMO_RESTAURANT_ID)
-            uiState = MenuUiState.Success(DEMO_CLIENT_ITEMS)
+            uiState = DashboardUiState.Success(DEMO_CLIENT_ITEMS)
         }
     }
 
@@ -265,18 +250,10 @@ fun ClientDashboardScreen(
         floatingActionButton = {
             if (sessionChecked && activeSession == null && banChecked && !isBanned) {
                 FloatingActionButton(
-                    onClick = {
-                        scanLauncher.launch(
-                            ScanOptions().apply {
-                                setPrompt("Scanează codul QR de pe masa ta")
-                                setBeepEnabled(false)
-                                setOrientationLocked(false)
-                            }
-                        )
-                    },
+                    onClick        = onNavigateToQrScanner,
                     containerColor = Brand,
-                    contentColor = White,
-                    shape = RoundedCornerShape(16.dp)
+                    contentColor   = White,
+                    shape          = RoundedCornerShape(16.dp)
                 ) {
                     Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scanează QR masă")
                 }
@@ -298,17 +275,17 @@ fun ClientDashboardScreen(
                 modifier   = Modifier.fillMaxSize().padding(padding)
             )
         } else when (val state = uiState) {
-            is MenuUiState.Loading -> Box(
+            is DashboardUiState.Loading -> Box(
                 modifier = Modifier.padding(padding).fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) { CircularProgressIndicator(color = Brand) }
 
-            is MenuUiState.Empty -> Box(
+            is DashboardUiState.Empty -> Box(
                 modifier = Modifier.padding(padding).fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) { EmptyMenuState() }
 
-            is MenuUiState.Success -> {
+            is DashboardUiState.Success -> {
                 val allCategories = remember(state.items) {
                     listOf("Toate") + state.items
                         .map { it.category }.filter { it.isNotBlank() }.distinct().sorted()

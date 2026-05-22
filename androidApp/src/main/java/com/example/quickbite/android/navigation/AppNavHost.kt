@@ -8,6 +8,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import com.example.quickbite.android.screens.ClientActiveSessionScreen
 import com.example.quickbite.android.screens.ClientDashboardScreen
 import com.example.quickbite.android.screens.ClientOrderingScreen
 import com.example.quickbite.android.screens.LiveFloorPlanScreen
@@ -17,8 +18,12 @@ import com.example.quickbite.android.screens.ProfessionalDashboardScreen
 import com.example.quickbite.android.screens.ProducerDashboardScreen
 import com.example.quickbite.android.screens.RegisterScreen
 import com.example.quickbite.android.screens.RestaurantDashboardScreen
+import com.example.quickbite.android.screens.ClientHomeFeedScreen
+import com.example.quickbite.android.screens.ProfileSettingsScreen
+import com.example.quickbite.android.screens.QrScannerScreen
 import com.example.quickbite.android.screens.RestaurantFeedScreen
 import com.example.quickbite.android.screens.RestaurantMapScreen
+import com.example.quickbite.android.screens.RestaurantPreviewScreen
 import com.example.quickbite.android.screens.RoleSelectionScreen
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -104,10 +109,11 @@ fun AppNavHost() {
 
         composable("client_dashboard") {
             ClientDashboardScreen(
-                onNavigateToOrdering = { restaurantId, tableNumber ->
+                onNavigateToOrdering  = { restaurantId, tableNumber ->
                     navController.navigate("client_ordering/$restaurantId/$tableNumber")
                 },
-                onSignOut = signOut
+                onNavigateToQrScanner = { navController.navigate("qr_scanner") },
+                onSignOut             = signOut
             )
         }
 
@@ -167,11 +173,93 @@ fun AppNavHost() {
         }
 
         composable("restaurant_feed") {
-            RestaurantFeedScreen(
-                onRestaurantClick = { restaurantId, tableNumber ->
-                    navController.navigate("client_ordering/$restaurantId/$tableNumber")
+            ClientHomeFeedScreen(
+                onRestaurantClick = { restaurantId, _ ->
+                    navController.navigate("restaurant_preview/$restaurantId")
                 },
-                onSignOut = signOut
+                onQrScanClick  = { navController.navigate("qr_scanner") },
+                onProfileClick = { navController.navigate("profile_settings") }
+            )
+        }
+
+        composable("client_home_feed") {
+            ClientHomeFeedScreen(
+                onRestaurantClick = { restaurantId, _ ->
+                    navController.navigate("restaurant_preview/$restaurantId")
+                },
+                onQrScanClick  = { navController.navigate("qr_scanner") },
+                onProfileClick = { navController.navigate("profile_settings") }
+            )
+        }
+
+        composable(
+            route     = "restaurant_preview/{restaurantId}",
+            arguments = listOf(navArgument("restaurantId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: return@composable
+            RestaurantPreviewScreen(
+                restaurantId    = restaurantId,
+                onScanQrClicked = { navController.navigate("qr_scanner?expectedRestaurantId=$restaurantId") },
+                onBack          = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = "qr_scanner?expectedRestaurantId={expectedRestaurantId}",
+            arguments = listOf(
+                navArgument("expectedRestaurantId") {
+                    type         = NavType.StringType
+                    defaultValue = ""
+                }
+            )
+        ) { backStackEntry ->
+            val expectedRestaurantId = backStackEntry.arguments?.getString("expectedRestaurantId") ?: ""
+            QrScannerScreen(
+                expectedRestaurantId = expectedRestaurantId,
+                onRestaurantScanned  = { rawValue ->
+                    // QR format: "restaurantId_tableId_tableNumber"
+                    val parts = rawValue.trim().split("_")
+                    if (parts.size == 3 && parts[2].toIntOrNull() != null) {
+                        navController.navigate(
+                            "client_active_session/${parts[0]}/${parts[1]}/${parts[2]}"
+                        ) { popUpTo("qr_scanner") { inclusive = true } }
+                    } else {
+                        navController.navigate("client_ordering/$rawValue/1") {
+                            popUpTo("qr_scanner") { inclusive = true }
+                        }
+                    }
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route     = "client_active_session/{restaurantId}/{tableId}/{tableNumber}",
+            arguments = listOf(
+                navArgument("restaurantId") { type = NavType.StringType },
+                navArgument("tableId")      { type = NavType.StringType },
+                navArgument("tableNumber")  { type = NavType.IntType }
+            )
+        ) { backStackEntry ->
+            val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: return@composable
+            val tableId      = backStackEntry.arguments?.getString("tableId")      ?: return@composable
+            val tableNumber  = backStackEntry.arguments?.getInt("tableNumber")     ?: 1
+            ClientActiveSessionScreen(
+                restaurantId   = restaurantId,
+                tableId        = tableId,
+                tableNumber    = tableNumber,
+                onSessionEnded = {
+                    navController.navigate("client_home_feed") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable("profile_settings") {
+            ProfileSettingsScreen(
+                onSignOut = signOut,
+                onBack    = { navController.popBackStack() }
             )
         }
     }
