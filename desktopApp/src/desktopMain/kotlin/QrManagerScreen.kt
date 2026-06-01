@@ -78,7 +78,7 @@ fun QrManagerScreen(
     // Live table listener from Firestore
     if (db != null && restaurantId.isNotBlank()) {
         DisposableEffect(restaurantId) {
-            val reg = db.collection("users").document(restaurantId)
+            val reg = db.collection("restaurants").document(restaurantId)
                 .collection("tables")
                 .addSnapshotListener { snapshot, _ ->
                     if (snapshot == null) return@addSnapshotListener
@@ -93,15 +93,16 @@ fun QrManagerScreen(
     }
 
     // Regenerate QR whenever selection changes
+    // Format: "restaurantId_tableDocumentId_tableNumber" — parsed by the in-app QR scanner
     LaunchedEffect(selectedNum, restaurantId) {
         val num = selectedNum
         if (num != null) {
-            val rid  = restaurantId.ifBlank { "demo-restaurant" }
-            val link = "quickbite://order/$rid/$num"
-            val img  = renderQrBufferedImage(link)
+            val rid     = restaurantId.ifBlank { "demo-restaurant" }
+            val content = "${rid}_${num}_${num}"
+            val img     = renderQrBufferedImage(content)
             qrRawImage = img
             qrBitmap   = img.toComposeImageBitmap()
-            qrDeepLink = link
+            qrDeepLink = content
             saveMessage = null
         } else {
             qrBitmap = null
@@ -162,7 +163,7 @@ fun QrManagerScreen(
                             if (num == null || num < 1) { addError = true; return@Button }
                             if (tables.any { it.number == num }) { addError = true; return@Button }
                             scope.launch {
-                                db.collection("users").document(restaurantId)
+                                db.collection("restaurants").document(restaurantId)
                                     .collection("tables").document(num.toString())
                                     .set(mapOf("tableNumber" to num, "status" to TableStatus.FREE))
                             }
@@ -209,7 +210,7 @@ fun QrManagerScreen(
                             val n = bulkInput.trim().toIntOrNull()
                             if (n == null || n < 1 || n > 200) { bulkError = true; return@Button }
                             scope.launch {
-                                val colRef = db.collection("users").document(restaurantId).collection("tables")
+                                val colRef = db.collection("restaurants").document(restaurantId).collection("tables")
                                 val existing = tables.map { it.number }.toSet()
                                 val toCreate = (1..n).filter { it !in existing }
                                 toCreate.chunked(499).forEach { chunk ->
@@ -264,7 +265,7 @@ fun QrManagerScreen(
                             onDelete   = if (db != null) {
                                 {
                                     scope.launch {
-                                        db.collection("users").document(restaurantId)
+                                        db.collection("restaurants").document(restaurantId)
                                             .collection("tables").document(table.number.toString())
                                             .delete()
                                     }

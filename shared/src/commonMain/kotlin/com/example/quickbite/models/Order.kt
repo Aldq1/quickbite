@@ -26,10 +26,8 @@ object OrderStatus {
 }
 
 object TableStatus {
-    const val FREE                 = "FREE"
-    const val LIBERA               = "Liberă"               // Romanian QR flow
-    const val OCCUPIED             = "OCCUPIED"
-    const val OCUPATA              = "OCUPATA"              // Romanian QR flow
-    const val SOLICITARE_CURATENIE = "SOLICITARE_CURATENIE" // cleaning requested
-    const val PAYMENT_REQUESTED    = "PAYMENT_REQUESTED"
+    const val FREE               = "FREE"
+    const val OCCUPIED           = "OCCUPIED"
+    const val CLEANING_REQUESTED = "CLEANING_REQUESTED"
+    const val PAYMENT_REQUESTED  = "PAYMENT_REQUESTED"
 }

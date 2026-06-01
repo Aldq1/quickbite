@@ -80,23 +80,22 @@ fun WaiterDashboardScreen(restaurantId: String) {
     var issueOrder              by remember { mutableStateOf<RecentOrder?>(null) }
     var showFinishBlockedDialog by remember { mutableStateOf(false) }
 
-    // Real-time snapshot listener — cleaned up when the composable leaves composition
+    // Real-time snapshot listener for active orders
     DisposableEffect(restaurantId) {
         val reg = FirebaseFirestore.getInstance()
-            .collection("active_orders")
-            .whereEqualTo("restaurantId", restaurantId)
+            .collection("restaurants").document(restaurantId)
+            .collection("orders")
             .addSnapshotListener { snapshot, _ ->
                 isConnected = true
                 orders = snapshot?.documents?.mapNotNull { doc ->
                     val status = doc.getString("status") ?: return@mapNotNull null
-                    if (status !in setOf("PENDING", "COOKING", "READY", "COMPLETED")) return@mapNotNull null
+                    if (status !in setOf("PENDING", "COOKING", "READY")) return@mapNotNull null
                     val tableNumber = (doc.getLong("tableNumber") ?: return@mapNotNull null).toInt()
                     @Suppress("UNCHECKED_CAST")
                     val items = doc.get("items") as? List<Map<String, Any>> ?: emptyList()
                     val ts = doc.getLong("timestamp") ?: 0L
                     ActiveOrder(id = doc.id, tableNumber = tableNumber, items = items, timestamp = ts, occupantUid = doc.getString("occupantUid"), status = status)
                 } ?: emptyList()
-                // Auto-clear selection when the order disappears (e.g. delivered elsewhere)
                 val current = selectedOrder
                 if (current != null && orders.none { it.id == current.id }) {
                     selectedOrder = null
@@ -105,13 +104,12 @@ fun WaiterDashboardScreen(restaurantId: String) {
         onDispose { reg.remove() }
     }
 
-    // History listener — same collection, different status filter, client-side time window + sort.
-    // No composite index needed: single-field whereEqualTo + client-side post-filter.
+    // History listener — same subcollection, client-side status + time filter
     DisposableEffect(restaurantId) {
         val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
         val reg = FirebaseFirestore.getInstance()
-            .collection("active_orders")
-            .whereEqualTo("restaurantId", restaurantId)
+            .collection("restaurants").document(restaurantId)
+            .collection("orders")
             .addSnapshotListener { snapshot, _ ->
                 recentOrders = snapshot?.documents?.mapNotNull { doc ->
                     val status = doc.getString("status") ?: return@mapNotNull null
@@ -138,11 +136,10 @@ fun WaiterDashboardScreen(restaurantId: String) {
 
     fun markDelivered(order: ActiveOrder) {
         scope.launch(Dispatchers.IO) {
-            // Set order to COMPLETED so the client's notification listener fires
             suspendCancellableCoroutine { cont ->
                 FirebaseFirestore.getInstance()
-                    .collection("active_orders")
-                    .document(order.id)
+                    .collection("restaurants").document(restaurantId)
+                    .collection("orders").document(order.id)
                     .update("status", "COMPLETED")
                     .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                     .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
@@ -177,10 +174,9 @@ fun WaiterDashboardScreen(restaurantId: String) {
                             .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
                     }
                 }
-                // Mark order as CANCELLED (client session listener will fire and clear the lock)
                 suspendCancellableCoroutine { cont ->
-                    db.collection("active_orders")
-                        .document(order.id)
+                    db.collection("restaurants").document(restaurantId)
+                        .collection("orders").document(order.id)
                         .update(mapOf("status" to "CANCELLED", "cancelReason" to reason))
                         .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                         .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
@@ -205,8 +201,8 @@ fun WaiterDashboardScreen(restaurantId: String) {
                 if (updates.isEmpty()) return@launch
                 suspendCancellableCoroutine { cont ->
                     FirebaseFirestore.getInstance()
-                        .collection("active_orders")
-                        .document(order.id)
+                        .collection("restaurants").document(restaurantId)
+                        .collection("orders").document(order.id)
                         .update(updates)
                         .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                         .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
@@ -221,8 +217,8 @@ fun WaiterDashboardScreen(restaurantId: String) {
                 val db = FirebaseFirestore.getInstance()
                 // Fresh Firestore read — authoritative safety check, not relying on in-memory state
                 val snapshot = suspendCancellableCoroutine { cont ->
-                    db.collection("active_orders")
-                        .whereEqualTo("restaurantId", restaurantId)
+                    db.collection("restaurants").document(restaurantId)
+                        .collection("orders")
                         .whereEqualTo("tableNumber", tableNumber.toLong())
                         .get()
                         .addOnSuccessListener { cont.resumeWith(Result.success(it)) }
@@ -230,7 +226,7 @@ fun WaiterDashboardScreen(restaurantId: String) {
                 }
                 val activeDocs = snapshot.documents.filter { doc ->
                     val s = doc.getString("status") ?: return@filter false
-                    s !in setOf("ARCHIVED", "CANCELLED")
+                    s !in setOf("ARCHIVED", "CANCELLED", "COMPLETED")
                 }
                 val isBlocked = activeDocs.any { doc ->
                     val s = doc.getString("status") ?: ""
@@ -244,7 +240,7 @@ fun WaiterDashboardScreen(restaurantId: String) {
                 activeDocs.forEach { doc ->
                     batch.update(doc.reference, "status", "ARCHIVED")
                 }
-                val tableRef = db.collection("users")
+                val tableRef = db.collection("restaurants")
                     .document(restaurantId)
                     .collection("tables")
                     .document(tableNumber.toString())

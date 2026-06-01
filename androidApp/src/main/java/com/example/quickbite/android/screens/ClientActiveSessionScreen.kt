@@ -101,7 +101,7 @@ fun ClientActiveSessionScreen(
             suspendCancellableCoroutine<Unit> { cont ->
                 db.collection("restaurants").document(restaurantId)
                     .collection("tables").document(tableId)
-                    .update("status", TableStatus.OCUPATA)
+                    .update("status", TableStatus.OCCUPIED)
                     .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                     .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
             }
@@ -147,7 +147,7 @@ fun ClientActiveSessionScreen(
                         "tableNumber" to tableNumber,
                         "items"       to serializedItems,
                         "totalPrice"  to capturedPrice,
-                        "status"      to OrderStatus.PRIMITA,
+                        "status"      to OrderStatus.PENDING,
                         "timestamp"   to System.currentTimeMillis()
                     )
                     suspendCancellableCoroutine<Unit> { cont ->
@@ -177,7 +177,7 @@ fun ClientActiveSessionScreen(
                     suspendCancellableCoroutine<Unit> { cont ->
                         db.collection("restaurants").document(restaurantId)
                             .collection("tables").document(tableId)
-                            .update("status", TableStatus.SOLICITARE_CURATENIE)
+                            .update("status", TableStatus.CLEANING_REQUESTED)
                             .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                             .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
                     }
@@ -197,7 +197,7 @@ fun ClientActiveSessionScreen(
                     suspendCancellableCoroutine<Unit> { cont ->
                         db.collection("restaurants").document(restaurantId)
                             .collection("tables").document(tableId)
-                            .update("status", TableStatus.LIBERA)
+                            .update("status", TableStatus.FREE)
                             .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                             .addOnFailureListener { cont.resumeWith(Result.failure(it)) }
                     }

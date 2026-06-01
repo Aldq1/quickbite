@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Required for Firebase and Google Maps -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
 
@@ -16,22 +15,34 @@
         <!--
             Google Maps API Key.
             Add  MAPS_API_KEY=<your-key>  to local.properties, then sync.
-            Obtain a key at: https://console.cloud.google.com/apis/credentials
-            Enable "Maps SDK for Android" in your Google Cloud project.
         -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${MAPS_API_KEY}" />
 
+        <!-- Food ordering UI with bottom navigation — primary launcher -->
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.FoodOrderingActivity"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:theme="@style/Theme.QuickBite.FoodOrdering">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Deep link from QR codes: quickbite://order/{restaurantId}/{tableNumber} -->
+        </activity>
+
+        <!-- Restaurant menu screen -->
+        <activity
+            android:name=".ui.RestaurantMenuActivity"
+            android:exported="false"
+            android:theme="@style/Theme.QuickBite.FoodOrdering" />
+
+        <!-- Compose-based activity — handles QR deep links and internal order flow -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <!-- Deep link: quickbite://order/{restaurantId}/{tableNumber} -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

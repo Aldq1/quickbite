@@ -18,18 +18,16 @@ object FirestoreService {
 
     // ── Table status ──────────────────────────────────────────────────────────
 
-    // Fire-and-forget variant — kept for callers that don't run in a coroutine
     fun updateTableStatus(restaurantId: String, tableNumber: Int, status: String, occupantUid: String? = null) {
-        db.collection("users").document(restaurantId)
+        db.collection("restaurants").document(restaurantId)
             .collection("tables").document(tableNumber.toString())
             .set(mapOf("status" to status, "tableNumber" to tableNumber, "occupantUid" to occupantUid))
     }
 
-    // Suspend variant — use this from coroutine contexts for proper back-pressure and error handling
     suspend fun updateTableStatusAsync(restaurantId: String, tableNumber: Int, status: String, occupantUid: String? = null) {
         withContext(Dispatchers.IO) {
             suspendCancellableCoroutine { cont ->
-                db.collection("users").document(restaurantId)
+                db.collection("restaurants").document(restaurantId)
                     .collection("tables").document(tableNumber.toString())
                     .set(mapOf("status" to status, "tableNumber" to tableNumber, "occupantUid" to occupantUid))
                     .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
@@ -40,8 +38,9 @@ object FirestoreService {
 
     // ── Order listener ────────────────────────────────────────────────────────
 
-    fun listenToOrder(orderId: String, onStatusChange: (String) -> Unit): ListenerRegistration =
-        db.collection("orders").document(orderId)
+    fun listenToOrder(restaurantId: String, orderId: String, onStatusChange: (String) -> Unit): ListenerRegistration =
+        db.collection("restaurants").document(restaurantId)
+            .collection("orders").document(orderId)
             .addSnapshotListener { snapshot, _ ->
                 val status = snapshot?.getString("status") ?: return@addSnapshotListener
                 onStatusChange(status)

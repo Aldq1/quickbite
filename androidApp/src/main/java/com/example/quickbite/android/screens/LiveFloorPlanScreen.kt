@@ -68,7 +68,7 @@ fun LiveFloorPlanScreen(
     // Zero-latency real-time listener
     DisposableEffect(restaurantId) {
         val reg = FirebaseFirestore.getInstance()
-            .collection("users").document(restaurantId)
+            .collection("restaurants").document(restaurantId)
             .collection("tables")
             .addSnapshotListener { snapshot, _ ->
                 if (snapshot == null) return@addSnapshotListener

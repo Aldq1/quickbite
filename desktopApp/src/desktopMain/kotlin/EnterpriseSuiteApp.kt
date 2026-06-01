@@ -284,6 +284,10 @@ fun EnterpriseSuiteApp(db: Firestore?) {
     var waiterRestaurantId by remember { mutableStateOf("") }
 
     MaterialTheme(colorScheme = EnterpriseColorScheme) {
+        if (db == null) {
+            FirebaseSetupScreen()
+            return@MaterialTheme
+        }
         AnimatedContent(
             targetState  = currentRole,
             transitionSpec = {
@@ -2797,6 +2801,106 @@ private fun FirebaseOfflineWarning(modifier: Modifier = Modifier) {
                 )
             }
         }
+    }
+}
+
+// ── Firebase setup screen (shown when no service-account.json is found) ───────
+
+@Composable
+private fun FirebaseSetupScreen() {
+    val home = System.getProperty("user.home").replace("\\", "/")
+    Box(
+        modifier         = Modifier.fillMaxSize().background(EBg),
+        contentAlignment = Alignment.Center
+    ) {
+        ElevatedCard(
+            shape   = RoundedCornerShape(24.dp),
+            colors  = CardDefaults.elevatedCardColors(containerColor = ESurface),
+            modifier = Modifier.width(560.dp)
+        ) {
+            Column(
+                modifier            = Modifier.padding(40.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier         = Modifier.size(64.dp).background(EAmberDim, RoundedCornerShape(18.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Rounded.Warning, null, tint = EAmber, modifier = Modifier.size(34.dp))
+                }
+                Text(
+                    "Configurare Firebase necesară",
+                    fontSize   = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color      = ETextPrimary
+                )
+                Text(
+                    "Aplicația nu a găsit fișierul de credențiale Firebase.\n" +
+                    "Urmați pașii de mai jos pentru a configura accesul la baza de date.",
+                    fontSize   = 13.sp,
+                    color      = ETextMuted,
+                    textAlign  = TextAlign.Center,
+                    lineHeight = 20.sp
+                )
+
+                Column(
+                    modifier            = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(ESurface2)
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    SetupStep(1, "Deschideți Firebase Console → Project Settings → Service Accounts")
+                    SetupStep(2, "Apasati 'Generate new private key' si descarcati fisierul JSON")
+                    SetupStep(3, "Salvați fișierul descărcat în una din locațiile:")
+                    Column(
+                        modifier            = Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(EBg)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("• $home/.config/quickbite/service-account.json", fontSize = 11.sp, color = EBrand, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                        Text("• <director-proiect>/service-account.json",       fontSize = 11.sp, color = EBrand, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    }
+                    SetupStep(4, "Reporniți aplicația")
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(EBrandDim)
+                        .border(1.dp, EBrand.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.Info, null, tint = EBrand, modifier = Modifier.size(15.dp))
+                    Text(
+                        "Project ID: quickbite-7cc54",
+                        fontSize = 12.sp,
+                        color    = EBrand
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetupStep(number: Int, text: String) {
+    Row(
+        verticalAlignment     = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier         = Modifier.size(22.dp).background(EBrandTint, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("$number", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EBrand)
+        }
+        Text(text, fontSize = 13.sp, color = ETextMuted, lineHeight = 19.sp, modifier = Modifier.weight(1f))
     }
 }
 

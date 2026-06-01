@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_primary">#0A0A0A</color>
+    <color name="bg_card">#141414</color>
+    <color name="bg_surface">#1A1A1A</color>
+    <color name="accent_orange">#E8521A</color>
+    <color name="accent_orange_dark">#C44415</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#8A8A8A</color>
+    <color name="divider">#2A2A2A</color>
+    <color name="nav_inactive">#555555</color>
+    <color name="card_image_bg">#242424</color>
+    <color name="rating_star">#FFD700</color>
+</resources>

@@ -74,10 +74,7 @@ class AuthStateHolder(private val db: Firestore?) {
                 val uid = authClient.signIn(email.trim(), password)
 
                 val userDoc = withContext(Dispatchers.IO) {
-                    db?.collection("users")?.document(uid)?.get()?.get()
-                } ?: run {
-                    errorMessage = "Serviciul Firebase nu este disponibil."
-                    return@launch
+                    db!!.collection("users").document(uid).get().get()
                 }
 
                 if (!userDoc.exists()) {
@@ -136,7 +133,7 @@ class AuthStateHolder(private val db: Firestore?) {
                 }
 
                 withContext(Dispatchers.IO) {
-                    db?.collection("users")?.document(uid)?.set(userDocData)?.get()
+                    db!!.collection("users").document(uid).set(userDocData).get()
                 }
 
                 onSuccess()

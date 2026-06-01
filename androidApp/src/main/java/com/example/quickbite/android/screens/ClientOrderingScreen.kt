@@ -122,15 +122,15 @@ fun ClientOrderingScreen(
 
     DisposableEffect(placedOrderId) {
         val id = placedOrderId ?: return@DisposableEffect onDispose {}
-        val reg = FirestoreService.listenToOrder(id) { status ->
-            if (status == OrderStatus.DELIVERED) showNotificationDialog = true
+        val reg = FirestoreService.listenToOrder(restaurantId, id) { status ->
+            if (status == OrderStatus.COMPLETED) showNotificationDialog = true
         }
         onDispose { reg.remove() }
     }
 
     DisposableEffect(restaurantId, tableNumber) {
         val reg = FirebaseFirestore.getInstance()
-            .collection("users").document(restaurantId)
+            .collection("restaurants").document(restaurantId)
             .collection("tables").document(tableNumber.toString())
             .addSnapshotListener { snapshot, _ ->
                 val isOccupied  = snapshot?.getString("status") == TableStatus.OCCUPIED
@@ -199,8 +199,8 @@ fun ClientOrderingScreen(
                     // null-return issue that kills the generic .await() extension silently.
                     suspendCancellableCoroutine<Unit> { cont ->
                         FirebaseFirestore.getInstance()
-                            .collection("orders")
-                            .document(orderId)
+                            .collection("restaurants").document(capturedRid)
+                            .collection("orders").document(orderId)
                             .set(orderData)
                             .addOnSuccessListener { cont.resumeWith(Result.success(Unit)) }
                             .addOnFailureListener { cont.resumeWith(Result.failure(it)) }

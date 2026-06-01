@@ -224,9 +224,7 @@ fun AppNavHost() {
                             "client_active_session/${parts[0]}/${parts[1]}/${parts[2]}"
                         ) { popUpTo("qr_scanner") { inclusive = true } }
                     } else {
-                        navController.navigate("client_ordering/$rawValue/1") {
-                            popUpTo("qr_scanner") { inclusive = true }
-                        }
+                        Toast.makeText(context, "QR invalid. Scanați codul de la masa restaurantului.", Toast.LENGTH_LONG).show()
                     }
                 },
                 onBack = { navController.popBackStack() }
